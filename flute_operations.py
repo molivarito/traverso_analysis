@@ -9,6 +9,9 @@ from typing import Any, List, Tuple, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
+MM_TO_M_FACTOR = 1e-3
+M_TO_MM_FACTOR = 1e3
+DEFAULT_FLUTE_PART_ORDER = ["headjoint", "left", "right", "foot"]
 class FluteOperations:
     def __init__(self, flute_data: Any) -> None:
         """
@@ -64,7 +67,7 @@ class FluteOperations:
         Returns:
             Tuple[plt.Figure, List[Any]]: The figure and list of axes.
         """
-        part_order = ["headjoint", "left", "right", "foot"]
+        part_order = DEFAULT_FLUTE_PART_ORDER
         linestyles = ['-', '--', '-.', ':']
 
         if ax is None:
@@ -77,15 +80,22 @@ class FluteOperations:
             fig = ax[0].figure
 
         if len(ax) < len(part_order):
-            raise ValueError(f"At least {len(part_order)} axes are required.")
-
-        label_added = False
+            # Si solo se proporciona un eje, y se necesitan más, esto fallará.
+            # Considerar crear nuevos ejes si el 'ax' proporcionado no es suficiente, o lanzar un error más claro.
+            # Por ahora, se asume que si se pasa 'ax', es una lista de ejes del tamaño adecuado.
+            pass
 
         for i, part in enumerate(part_order):
             adjusted_positions, diameters = self._calculate_adjusted_positions(part, 0)
             linestyle = linestyles[i % len(linestyles)]
-            label = self.flute_data.data.get("Flute Model", "Unknown") if flute_names and not label_added else None
-            ax[i].plot(adjusted_positions, diameters, marker='o', linestyle=linestyle,
+            # El label se asigna directamente, la leyenda del subplot se encargará de no duplicar si se llama múltiples veces con el mismo label.
+            label = self.flute_data.data.get("Flute Model", "Unknown") if flute_names else None
+            
+            if isinstance(ax, (list, np.ndarray)): # Si ax es una lista o array de ejes
+                current_ax = ax[i]
+            else: # Si ax es un solo objeto Axes
+                current_ax = ax
+            current_ax.plot(adjusted_positions, diameters, marker='o', linestyle=linestyle,
                        color=flute_color, markersize=4, label=label)
 
             # Plot holes without adding duplicate legend entries
@@ -93,16 +103,13 @@ class FluteOperations:
             hole_diameters = self.flute_data.data[part].get("Holes diameter", [])
             if hole_positions and hole_diameters:
                 for pos, diam in zip(hole_positions, hole_diameters):
-                    ax[i].plot(pos, 10, color=flute_color, marker='o', markersize=diam * 2)
+                    current_ax.plot(pos, 10, color=flute_color, marker='o', markersize=diam * 2) # Y-position for holes is arbitrary
 
-            ax[i].set_xlabel("Position (mm)")
-            ax[i].set_ylabel("Diameter (mm)")
-            ax[i].set_title(f"{part.capitalize()} Geometry")
-            ax[i].grid(True)
-
-            if not label_added and label:
-                ax[i].legend(loc='upper right', fontsize=8)
-                label_added = True
+            current_ax.set_xlabel("Position (mm)")
+            current_ax.set_ylabel("Diameter (mm)")
+            current_ax.set_title(f"{part.capitalize()} Geometry")
+            current_ax.grid(True)
+            if label: current_ax.legend(loc='best', fontsize=8) # 'best' o 'upper right'
 
         fig.tight_layout(rect=[0, 0.03, 1, 0.95])
         if flute_names:
@@ -128,7 +135,7 @@ class FluteOperations:
             fig = plt.figure(figsize=(20, 12))
             ax = fig.add_subplot(111)
 
-        part_order = ["headjoint", "left", "right", "foot"]
+        part_order = DEFAULT_FLUTE_PART_ORDER
         current_position = 0
 
         for i, part in enumerate(part_order):
@@ -177,7 +184,7 @@ class FluteOperations:
         ax.plot(positions, diameters, label=self.flute_data.data.get("Flute Model", "Unknown"),
                 linestyle=flute_style, color=flute_color)
 
-        part_order = ["headjoint", "left", "right", "foot"]
+        part_order = DEFAULT_FLUTE_PART_ORDER
         current_position = 0
 
         for part in part_order:
@@ -222,7 +229,7 @@ class FluteOperations:
                 linewidth=2, label=self.flute_data.data.get("Flute Model", "Unknown") if flute_names else "Flute")
         ax.plot(positions, [-d / 2 for d in diameters], color=flute_color, linestyle=flute_style, linewidth=2)
 
-        part_order = ["headjoint", "left", "right", "foot"]
+        part_order = DEFAULT_FLUTE_PART_ORDER
         current_position = 0
 
         for part in part_order:
@@ -255,8 +262,11 @@ class FluteOperations:
         """
         try:
             acoustic_analysis = self.flute_data.acoustic_analysis[note]
-            if not hasattr(acoustic_analysis, "plot_instrument_geometry"):
-                raise TypeError(f"The object for note '{note}' does not support geometry plotting.")
+            # isinstance check is more Pythonic than hasattr for methods if you know the expected type
+            if not isinstance(acoustic_analysis, ImpedanceComputation):
+                 logger.warning(f"Acoustic analysis for note '{note}' is not of type ImpedanceComputation.")
+                 # Or raise TypeError if it's a critical issue
+                 # return None 
 
             if ax is None:
                 fig, ax = plt.subplots(figsize=(10, 6))
@@ -270,7 +280,8 @@ class FluteOperations:
             logger.error(f"Error plotting instrument geometry for note {note}: {e}")
             return None
 
-    def _plot_individual_admittance(self, acoustic_analysis_list: List[Tuple[Any, str]], note: str) -> plt.Figure:
+    # Consider making this public if called from GUI/data_processing
+    def plot_individual_admittance_analysis(self, acoustic_analysis_list: List[Tuple[Any, str]], note: str) -> plt.Figure:
         """
         Creates a multi-panel figure showing admittance, pressure, geometry, and flow for a specific note.
 
@@ -323,8 +334,8 @@ class FluteOperations:
                     instrument_geometry = analysis[note].get_instrument_geometry()
                     if instrument_geometry:
                         for shape in instrument_geometry.main_bore_shapes:
-                            self._plot_shape(shape, ax_geometry, mmeter=1e3, color=color, linewidth=1)
-                        self._plot_holes(instrument_geometry.holes, ax_geometry, mmeter=1e3, note=note, color=color)
+                            self._plot_shape(shape, ax_geometry, mmeter=M_TO_MM_FACTOR, color=color, linewidth=1)
+                        self._plot_holes(instrument_geometry.holes, ax_geometry, mmeter=M_TO_MM_FACTOR, note=note, color=color, acoustic_analysis_obj=analysis[note])
                         ax_geometry.set_aspect('equal', adjustable='datalim')
                 except Exception as e:
                     logger.error(f"Error plotting geometry: {e}")
@@ -355,7 +366,8 @@ class FluteOperations:
         fig.tight_layout()
         return fig
 
-    def _plot_combined_admittance(self, acoustic_analysis_list: List[Tuple[Any, str]]) -> plt.Figure:
+    # Consider making this public
+    def plot_combined_admittance(self, acoustic_analysis_list: List[Tuple[Any, str]]) -> plt.Figure:
         """
         Generates a combined admittance plot for all notes from multiple flutes.
 
@@ -386,7 +398,8 @@ class FluteOperations:
         ax.grid(True)
         return fig
 
-    def _plot_summary_antiresonances(self, acoustic_analysis_list: List[Tuple[Any, str]], notes: List[str]) -> plt.Figure:
+    # Consider making this public
+    def plot_summary_antiresonances(self, acoustic_analysis_list: List[Tuple[Any, str]], notes: List[str]) -> plt.Figure:
         """
         Plots antiresonant frequencies for each note across multiple flutes, including labels for the first two values.
 
@@ -430,7 +443,8 @@ class FluteOperations:
         ax.grid(True)
         return fig
 
-    def _plot_summary_cents_differences(self, acoustic_analysis_list: List[Tuple[Any, str]], notes: List[str]) -> plt.Figure:
+    # Consider making this public
+    def plot_summary_cents_differences(self, acoustic_analysis_list: List[Tuple[Any, str]], notes: List[str]) -> plt.Figure:
         """
         Plots the difference in cents between peaks for each note across multiple flutes.
 
@@ -489,13 +503,14 @@ class FluteOperations:
                 (np.append(radius, np.flip(-radius)) + shift_y) * mmeter,
                 **kwargs)
 
-    def _plot_holes(self, holes: List[Any], ax: Any, mmeter: float, note: Optional[str] = None, **kwargs: Any) -> None:
+    def _plot_holes(self, holes: List[Any], ax: Any, mmeter: float, note: Optional[str] = None, acoustic_analysis_obj: Optional[ImpedanceComputation] = None, **kwargs: Any) -> None:
         """
         Draws the holes on the top view.
 
         Args:
             holes (List[Any]): List of holes.
             ax (Any): The axis to plot on.
+            acoustic_analysis_obj (ImpedanceComputation): The acoustic analysis object for the current note and flute.
             mmeter (float): Scale factor to convert to millimeters.
             note (Optional[str]): Specific note to determine open/closed state.
             **kwargs: Additional keyword arguments for plotting.
@@ -508,8 +523,11 @@ class FluteOperations:
                 x_circle = position + radius * np.cos(theta)
                 y_circle = radius * np.sin(theta)
                 # Determine whether to use fill or plot based on fingering info
-                if note:
-                    fingering = self.flute_data.acoustic_analysis[note].get_instrument_geometry().fingering_chart.fingering_of(note)
+                if note and acoustic_analysis_obj:
+                    # Ensure acoustic_analysis_obj is the one for the specific flute being plotted, not self.flute_data...
+                    # if this helper is used for multiple flutes on the same axes.
+                    # The current call from plot_individual_admittance_analysis passes the correct analysis object.
+                    fingering = acoustic_analysis_obj.get_instrument_geometry().fingering_chart.fingering_of(note)
                     plot_func = ax.plot if fingering.is_side_comp_open(hole.label) else ax.fill
                 else:
                     plot_func = ax.plot
@@ -530,7 +548,7 @@ class FluteOperations:
             Optional[plt.Figure]: The generated figure, or None if an error occurs.
         """
         try:
-            mmeter = 1e3
+            # mmeter = M_TO_MM_FACTOR # Already defined as argument
             fig, ax = plt.subplots(figsize=(15, 3))
             ax.set_aspect('equal', adjustable='datalim')
             instrument_geometry = self.flute_data.acoustic_analysis[note].get_instrument_geometry()
@@ -538,8 +556,8 @@ class FluteOperations:
                 raise ValueError("Could not obtain instrument geometry.")
             logger.info("Plotting main tube shape...")
             for shape in instrument_geometry.main_bore_shapes:
-                self._plot_shape(shape, ax, mmeter, shift_x=0, shift_y=0, color='black', linewidth=1)
-            self._plot_holes(instrument_geometry.holes, ax, mmeter, note)
+                self._plot_shape(shape, ax, M_TO_MM_FACTOR, shift_x=0, shift_y=0, color='black', linewidth=1)
+            self._plot_holes(instrument_geometry.holes, ax, M_TO_MM_FACTOR, note, acoustic_analysis_obj=self.flute_data.acoustic_analysis[note])
             ax.set_xlabel("Position (mm)")
             ax.set_ylabel("Radius (mm)")
             ax.set_title(f"Top View - Instrument Geometry for Note '{note}'")
@@ -599,7 +617,7 @@ class FluteOperations:
                     moc = np.nan
                 moc_values.append(moc)
                 x_positions.append(note_positions[note])
-            ax.plot(x_positions, moc_values, "o-", linestyle=linestyle, color=color, label=flute_name)
+            ax.plot(x_positions, moc_values, "o", linestyle=linestyle, color=color, label=flute_name)
         ax.set_xticks(range(len(notes)))
         ax.set_xticklabels(notes)
         ax.set_xlabel("Nota")

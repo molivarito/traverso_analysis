@@ -15,12 +15,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def save_plots_to_pdf(flute_operations_list: List[Any], output_pdf_paths: Tuple[str, str]) -> None:
+DEFAULT_FING_CHART_PATH = "data_json/traverso_fingerchart.txt"
+
+def save_plots_to_pdf(flute_operations_list: List[FluteOperations], output_pdf_paths: Tuple[str, str], fing_chart_file_path: str = DEFAULT_FING_CHART_PATH) -> None:
     """
     Genera y guarda gráficos combinados de múltiples flautas en archivos PDF.
 
     Args:
-        flute_operations_list (list): Lista de objetos FluteOperations.
+        flute_operations_list (List[FluteOperations]): Lista de objetos FluteOperations.
+        fing_chart_file_path (str): Ruta al archivo de digitaciones.
         output_pdf_paths (tuple): Rutas de los archivos PDF (geométricos, acústicos).
     """
     geometrical_pdf_path, acoustic_pdf_path = output_pdf_paths
@@ -30,10 +33,15 @@ def save_plots_to_pdf(flute_operations_list: List[Any], output_pdf_paths: Tuple[
         flute_names = [fo.flute_data.data.get("Flute Model", "Unknown") for fo in flute_operations_list]
 
         # Generar colores y estilos
-        base_colors = ['b', 'g', 'r', 'm', 'c', 'y']
-        flute_colors = [base_colors[i % len(base_colors)] for i in range(len(flute_operations_list))]
-        base_styles = ['-', '--', '-.', ':']
-        flute_styles = [base_styles[i % len(base_styles)] for i in range(len(flute_operations_list))]
+        num_flutes = len(flute_operations_list)
+        # Usar un colormap para más variedad si hay muchas flautas
+        if num_flutes > 6: # Ejemplo, podrías usar tab10 o tab20
+            colormap = plt.cm.get_cmap('tab10', num_flutes) # 'viridis', 'tab10', 'tab20'
+            flute_colors = [colormap(i) for i in range(num_flutes)]
+        else:
+            base_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'] # Colores por defecto de Matplotlib
+            flute_colors = [base_colors[i % len(base_colors)] for i in range(num_flutes)]
+        flute_styles = ['-', '--', '-.', ':'] * (num_flutes // 4 + 1) # Repetir estilos
 
         # --- Guardar gráficos geométricos ---
         geom_pdf_path = Path(geometrical_pdf_path)
@@ -43,29 +51,29 @@ def save_plots_to_pdf(flute_operations_list: List[Any], output_pdf_paths: Tuple[
             # Gráficos individuales
             fig_individual, ax_individual = plt.subplots(2, 2, figsize=(14, 8))
             ax_individual = ax_individual.flatten()
-            for fo, color, style in zip(flute_operations_list, flute_colors, flute_styles):
-                fo.plot_individual_parts(ax=ax_individual, flute_names=flute_names, flute_color=color)
+            for idx, fo in enumerate(flute_operations_list):
+                fo.plot_individual_parts(ax=ax_individual, flute_names=[flute_names[idx]], flute_color=flute_colors[idx])
             geometrical_pdf.savefig(fig_individual)
             plt.close(fig_individual)
 
             # Partes superpuestas
             fig_overlapping, ax_overlapping = plt.subplots()
-            for fo, color, style in zip(flute_operations_list, flute_colors, flute_styles):
-                fo.plot_all_parts_overlapping(ax=ax_overlapping, flute_names=flute_names, flute_color=color, flute_style=style)
+            for idx, fo in enumerate(flute_operations_list):
+                fo.plot_all_parts_overlapping(ax=ax_overlapping, flute_names=[flute_names[idx]], flute_color=flute_colors[idx], flute_style=flute_styles[idx])
             geometrical_pdf.savefig(fig_overlapping)
             plt.close(fig_overlapping)
 
             # Perfil combinado
             fig_combined, ax_combined = plt.subplots()
-            for fo, color, style in zip(flute_operations_list, flute_colors, flute_styles):
-                fo.plot_combined_flute_data(ax=ax_combined, flute_names=flute_names, flute_color=color, flute_style=style)
+            for idx, fo in enumerate(flute_operations_list):
+                fo.plot_combined_flute_data(ax=ax_combined, flute_names=[flute_names[idx]], flute_color=flute_colors[idx], flute_style=flute_styles[idx])
             geometrical_pdf.savefig(fig_combined)
             plt.close(fig_combined)
 
             # Vista 2D
             fig_2d, ax_2d = plt.subplots()
-            for fo, color, style in zip(flute_operations_list, flute_colors, flute_styles):
-                fo.plot_flute_2d_view(ax=ax_2d, flute_names=flute_names, flute_color=color, flute_style=style)
+            for idx, fo in enumerate(flute_operations_list):
+                fo.plot_flute_2d_view(ax=ax_2d, flute_names=[flute_names[idx]], flute_color=flute_colors[idx], flute_style=flute_styles[idx])
             geometrical_pdf.savefig(fig_2d)
             plt.close(fig_2d)
 
@@ -100,27 +108,27 @@ def save_plots_to_pdf(flute_operations_list: List[Any], output_pdf_paths: Tuple[
                     logger.exception("Error al graficar la geometría: %s", e)
 
             # Orden de notas
-            fing_chart_file = Path("data_json/traverso_fingerchart.txt")
+            fing_chart_file = Path(fing_chart_file_path)
             with fing_chart_file.open("r") as file:
-                ordered_notes = file.read().split()
+                header_line = file.readline().strip() # Asumiendo que las notas están en la primera línea
+                ordered_notes = header_line.split()[1:] # Omitir "label"
 
             common_notes = set()
             for analysis, _ in acoustic_analysis_list:
                 common_notes.update(analysis.keys())
             common_notes = [note for note in ordered_notes if note in common_notes]
-
+            
             # Admitancia combinada
-            fig_combined_adm = flute_operations_list[0]._plot_combined_admittance(acoustic_analysis_list)
+            fig_combined_adm = flute_operations_list[0].plot_combined_admittance(acoustic_analysis_list) # Usar método público
             acoustic_pdf.savefig(fig_combined_adm)
             plt.close(fig_combined_adm)
 
             # Frecuencias antiresonantes
-            fig_antiresonances = flute_operations_list[0]._plot_summary_antiresonances(acoustic_analysis_list, common_notes)
+            fig_antiresonances = flute_operations_list[0].plot_summary_antiresonances(acoustic_analysis_list, common_notes) # Usar método público
             acoustic_pdf.savefig(fig_antiresonances)
             plt.close(fig_antiresonances)
-
             # Diferencias en cents
-            fig_cents = flute_operations_list[0]._plot_summary_cents_differences(acoustic_analysis_list, common_notes)
+            fig_cents = flute_operations_list[0].plot_summary_cents_differences(acoustic_analysis_list, common_notes) # Usar método público
             acoustic_pdf.savefig(fig_cents)
             plt.close(fig_cents)
             # Gráfico de MOC
@@ -135,7 +143,7 @@ def save_plots_to_pdf(flute_operations_list: List[Any], output_pdf_paths: Tuple[
 
             # Admitancia individual por nota
             for note in common_notes:
-                fig_indiv = flute_operations_list[0]._plot_individual_admittance(acoustic_analysis_list, note)
+                fig_indiv = flute_operations_list[0].plot_individual_admittance_analysis(acoustic_analysis_list, note) # Usar método público
                 acoustic_pdf.savefig(fig_indiv)
                 plt.close(fig_indiv)
 

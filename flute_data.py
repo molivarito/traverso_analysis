@@ -11,9 +11,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+FLUTE_PARTS_ORDER = ["headjoint", "left", "right", "foot"]
+
+# Default acoustic parameters for holes if not specified elsewhere
+DEFAULT_CHIMNEY_HEIGHT = 3e-3 # meters
+DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT = 5e-3 # meters
+DEFAULT_HOLE_RADIUS_OUT_FACTOR = 1.2 # Factor to estimate outer radius from inner if not given
+
+# Intenta construir una ruta más robusta para el archivo de digitaciones por defecto.
+# Esto asume que data_json está en el directorio padre del directorio donde reside este script (flute_data.py)
+# o al mismo nivel si flute_data.py está en el directorio raíz del proyecto.
+# Para una aplicación empaquetada, se necesitarían otros métodos (ej. importlib.resources).
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_FING_CHART_PATH = SCRIPT_DIR.parent / "data_json" / "traverso_fingerchart.txt"
+if not DEFAULT_FING_CHART_PATH.exists(): # Fallback si la estructura anterior no se cumple
+    DEFAULT_FING_CHART_PATH = Path("data_json") / "traverso_fingerchart.txt"
 class FluteData:
     def __init__(self, source: str, notion_token: str = None, database_id: str = None,
-                 fing_chart_file: str = "data_json/traverso_fingerchart.txt", temperature: float = 20,
+                 fing_chart_file: str = str(DEFAULT_FING_CHART_PATH), temperature: float = 20,
                  la_frequency: float = 415) -> None:
         """
         Constructor de la clase FluteData.
@@ -69,8 +84,7 @@ class FluteData:
 
     def _read_json_data_from_files(self, base_dir: str) -> None:
         """Carga datos desde archivos JSON locales."""
-        parts = ["headjoint", "left", "right", "foot"]
-        for part in parts:
+        for part in FLUTE_PARTS_ORDER:
             json_path = Path(base_dir) / f"{part}.json"
             try:
                 with json_path.open('r') as file:
@@ -98,14 +112,7 @@ class FluteData:
             )
             if not (headjoint_data and left_data and right_data and foot_data):
                 raise ValueError(f"No se pudieron recuperar todos los datos desde Notion para '{flute_name}'.")
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as headjoint_file, \
-                 tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as left_file, \
-                 tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as right_file, \
-                 tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as foot_file:
-                json.dump(headjoint_data, headjoint_file, indent=4)
-                json.dump(left_data, left_file, indent=4)
-                json.dump(right_data, right_file, indent=4)
-                json.dump(foot_data, foot_file, indent=4)
+            # Los datos ya están en memoria, no es necesario guardarlos en archivos temporales.
             self.data = {
                 "headjoint": headjoint_data,
                 "left": left_data,
@@ -125,19 +132,38 @@ class FluteData:
         """
         combined_measurements = []
         current_position = 0
-        part_order = ["headjoint", "left", "right", "foot"]
+        # Longitud efectiva de cada parte (longitud total menos la espiga que se inserta)
+        effective_lengths = {}
+        for part_name in FLUTE_PARTS_ORDER:
+            part_data = self.data.get(part_name, {})
+            total_length = part_data.get("Total length", 0)
+            # La mortaja de la parte anterior determina cuánto se inserta la espiga de la parte actual.
+            # Para el headjoint, su "Mortise length" es la espiga que se inserta en el cuerpo.
+            # Para las otras partes, su "Mortise length" es la espiga que ellas insertan en la parte anterior.
+            # La lógica original parece restar la "Mortise length" de la *propia* parte para calcular el avance.
+            # Esto es correcto si "Mortise length" se interpreta como la longitud de la espiga de *esa* parte.
+            mortise_length = part_data.get("Mortise length", 0)
+            effective_lengths[part_name] = total_length - mortise_length
 
-        for part in part_order:
-            if part == "left":
-                current_position = self.data["headjoint"].get("Total length", 0) - self.data["headjoint"].get("Mortise length", 0)
-            elif part == "right":
-                current_position = (self.data["headjoint"].get("Total length", 0) - self.data["headjoint"].get("Mortise length", 0) +
-                                    self.data["left"].get("Total length", 0) - self.data["right"].get("Mortise length", 0))
-            elif part == "foot":
-                current_position = (self.data["headjoint"].get("Total length", 0) - self.data["headjoint"].get("Mortise length", 0) +
-                                    self.data["left"].get("Total length", 0) + self.data["right"].get("Total length", 0) -
-                                    self.data["right"].get("Mortise length", 0) - self.data["foot"].get("Mortise length", 0))
-
+        for i, part in enumerate(FLUTE_PARTS_ORDER):
+            if i > 0:
+                # La posición actual es la suma de las longitudes efectivas de las partes anteriores.
+                # La lógica original tenía una forma más compleja de calcular esto,
+                # esta es una simplificación asumiendo que "Mortise length" es la espiga de la parte actual.
+                # Revalidar esta lógica con el significado exacto de "Mortise length" en los JSON.
+                # El cálculo original para current_position se mantiene por ahora, pero podría simplificarse si
+                # "Mortise length" consistentemente significa "longitud de la espiga de esta parte".
+                # Para mantener la funcionalidad original exacta:
+                if part == "left":
+                    current_position = self.data["headjoint"].get("Total length", 0) - self.data["headjoint"].get("Mortise length", 0)
+                elif part == "right":
+                    current_position = (self.data["headjoint"].get("Total length", 0) - self.data["headjoint"].get("Mortise length", 0) +
+                                        self.data["left"].get("Total length", 0) - self.data["right"].get("Mortise length", 0)) # Originalmente usaba mortise de right
+                elif part == "foot":
+                    current_position = (self.data["headjoint"].get("Total length", 0) - self.data["headjoint"].get("Mortise length", 0) +
+                                        self.data["left"].get("Total length", 0) + self.data["right"].get("Total length", 0) -
+                                        self.data["right"].get("Mortise length", 0) - self.data["foot"].get("Mortise length", 0)) # Originalmente usaba mortise de right y foot
+            
             positions = [item["position"] for item in self.data[part]["measurements"]]
             diameters = [item["diameter"] for item in self.data[part]["measurements"]]
             mortise_length = self.data[part].get("Mortise length", 0)
@@ -166,21 +192,32 @@ class FluteData:
             side_holes = [['label', 'position', 'chimney', 'radius', 'radius_out']]
             emb_label = "embouchure"
             embouchure_hole = self.data["headjoint"].get("Holes position", [])[0]
-            embouchure_diameter = self.data["headjoint"].get("Holes diameter", [])[0]
-            side_holes.append([emb_label, embouchure_hole / 1000, 5e-3, embouchure_diameter / 2000, 5e-3])
+            embouchure_radius_mm = self.data["headjoint"].get("Holes diameter", [])[0] / 2
+            embouchure_chimney = self.data["headjoint"].get("Holes chimney", [DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT * 1000])[0] / 1000 # Convert mm to m
+            embouchure_radius_out_mm = self.data["headjoint"].get("Holes diameter_out", [embouchure_radius_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR])[0] / 2
+            side_holes.append([emb_label, embouchure_hole / 1000, embouchure_chimney, embouchure_radius_mm / 1000, embouchure_radius_out_mm / 1000])
+
             carrier_left = self.data["headjoint"].get("Total length", 0) - self.data["headjoint"].get("Mortise length", 0)
             for i, hole_pos in enumerate(self.data["left"].get("Holes position", [])):
-                hole_diam = self.data["left"].get("Holes diameter", [])[i]
-                side_holes.append([f"hole{i+1}", (carrier_left + hole_pos) / 1000, 3e-3, hole_diam / 2000, 4e-3])
+                hole_radius_mm = self.data["left"].get("Holes diameter", [])[i] / 2
+                hole_chimney = self.data["left"].get("Holes chimney", [DEFAULT_CHIMNEY_HEIGHT * 1000]*len(self.data["left"]["Holes position"]))[i] / 1000
+                hole_radius_out_mm = self.data["left"].get("Holes diameter_out", [hole_radius_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR]*len(self.data["left"]["Holes position"]))[i] / 2
+                side_holes.append([f"hole{i+1}", (carrier_left + hole_pos) / 1000, hole_chimney, hole_radius_mm / 1000, hole_radius_out_mm / 1000])
+
             carrier_right = carrier_left + self.data["left"].get("Total length", 0) - self.data["right"].get("Mortise length", 0)
             for i, hole_pos in enumerate(self.data["right"].get("Holes position", [])):
-                hole_diam = self.data["right"].get("Holes diameter", [])[i]
-                side_holes.append([f"hole{i+4}", (hole_pos + carrier_right) / 1000, 3e-3, hole_diam / 2000, 4e-3])
+                hole_radius_mm = self.data["right"].get("Holes diameter", [])[i] / 2
+                hole_chimney = self.data["right"].get("Holes chimney", [DEFAULT_CHIMNEY_HEIGHT * 1000]*len(self.data["right"]["Holes position"]))[i] / 1000
+                hole_radius_out_mm = self.data["right"].get("Holes diameter_out", [hole_radius_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR]*len(self.data["right"]["Holes position"]))[i] / 2
+                side_holes.append([f"hole{i+4}", (hole_pos + carrier_right) / 1000, hole_chimney, hole_radius_mm / 1000, hole_radius_out_mm / 1000])
+
             carrier_foot = carrier_right + self.data["right"].get("Total length", 0) - self.data["foot"].get("Mortise length", 0)
-            foot_hole = self.data["foot"].get("Holes position", [])[0]
-            foot_diameter = self.data["foot"].get("Holes diameter", [])[0]
-            side_holes.append([f"hole7", (foot_hole + carrier_foot) / 1000, 3e-3, foot_diameter / 2000, 4e-3])
-            Rw = embouchure_diameter / 2
+            foot_hole_pos = self.data["foot"].get("Holes position", [])[0]
+            foot_radius_mm = self.data["foot"].get("Holes diameter", [])[0] / 2
+            foot_chimney = self.data["foot"].get("Holes chimney", [DEFAULT_CHIMNEY_HEIGHT * 1000])[0] / 1000
+            foot_radius_out_mm = self.data["foot"].get("Holes diameter_out", [foot_radius_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR])[0] / 2
+            side_holes.append([f"hole7", (foot_hole_pos + carrier_foot) / 1000, foot_chimney, foot_radius_mm / 1000, foot_radius_out_mm / 1000])
+            Rw = embouchure_radius_mm / 1000 # Convert mm to m for player section
             freq = np.arange(100, 3000, 2)
             player_trans = Player("FLUTE")
             player_trans.update_curve("radiation_category", "infinite_flanged")

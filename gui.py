@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from flute_data import FluteData
 from flute_operations import FluteOperations
 
+DEFAULT_DATA_JSON_DIR = "../data_json"
+
 class TraditionalTextEditor(tk.Toplevel):
     def __init__(self, master=None):
         super().__init__(master)
@@ -97,14 +99,19 @@ class App(tk.Tk):
         
         ttk.Label(selection_frame, text="Select one or more flutes:").pack(side=tk.LEFT)
         
+        self.data_dir = DEFAULT_DATA_JSON_DIR # Se puede hacer configurable
+        browse_button = ttk.Button(selection_frame, text="Browse Data Dir", command=self.browse_data_directory)
+        browse_button.pack(side=tk.LEFT, padx=5)
+
         # Listbox for multiple selection
-        self.flute_list = [d for d in os.listdir("data_json") if os.path.isdir(os.path.join("data_json", d))]
-        if not self.flute_list:
-            self.flute_list = ["No flutes available"]
+        self.flute_list = []
         self.flute_listbox = tk.Listbox(selection_frame, selectmode=tk.EXTENDED, height=6)
-        for flute in self.flute_list:
-            self.flute_listbox.insert(tk.END, flute)
+        self.populate_flute_listbox() # Llenar inicialmente
         self.flute_listbox.pack(side=tk.LEFT, padx=10)
+        
+        # Mover la inicialización de flute_list y flute_listbox a un método
+        if not self.flute_list:
+            self.flute_listbox.insert(tk.END, "No flutes in default directory")
         
         load_button = ttk.Button(selection_frame, text="Load", command=self.load_flutes)
         load_button.pack(side=tk.LEFT, padx=10)
@@ -150,6 +157,20 @@ class App(tk.Tk):
         self.acoustic_analysis_list = []  # List of tuples (acoustic_analysis, flute_model)
         self.finger_frequencies = {}  # Taken from the first loaded flute
 
+    def browse_data_directory(self):
+        dir_path = filedialog.askdirectory(initialdir=".", title="Select Flute Data Directory")
+        if dir_path:
+            self.data_dir = dir_path
+            self.populate_flute_listbox()
+
+    def populate_flute_listbox(self):
+        self.flute_listbox.delete(0, tk.END)
+        if os.path.exists(self.data_dir) and os.path.isdir(self.data_dir):
+            self.flute_list = [d for d in os.listdir(self.data_dir) if os.path.isdir(os.path.join(self.data_dir, d))]
+            for flute in self.flute_list:
+                self.flute_listbox.insert(tk.END, flute)
+        else:
+            self.flute_listbox.insert(tk.END, f"Directory not found: {self.data_dir}")
     def load_flutes(self):
         selected_indices = self.flute_listbox.curselection()
         if not selected_indices:
@@ -162,7 +183,7 @@ class App(tk.Tk):
         self.finger_frequencies = {}
         
         for flute in selected_flautas:
-            data_path = os.path.join("data_json", flute)
+            data_path = os.path.join(self.data_dir, flute)
             try:
                 flute_data = FluteData(data_path)
                 flute_ops = FluteOperations(flute_data)
@@ -183,77 +204,73 @@ class App(tk.Tk):
         self.update_admittance_note_options()
         self.update_bi_espe_plot()
 
+    def _setup_plot_canvas(self, parent_frame: ttk.Frame, fig: plt.Figure):
+        """Helper para limpiar frame y dibujar canvas."""
+        for widget in parent_frame.winfo_children():
+            widget.destroy()
+        
+        # Aplicar estilo común a los ejes de la figura
+        for ax in fig.get_axes():
+            ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+            ax.minorticks_on()
+            ax.grid(which='minor', linestyle=':', linewidth=0.3, alpha=0.5)
+
+        canvas = FigureCanvasTkAgg(fig, master=parent_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        return canvas
+
     def update_parts_plot(self):
+        if not self.flute_ops_list: return
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
         ax = axes.flatten()
-
-        for widget in self.parts_frame.winfo_children():
-            widget.destroy()
 
         flute_names = [ops.flute_data.data.get("Flute Model", f"Flute {i}") 
                     for i, ops in enumerate(self.flute_ops_list, start=1)]
 
         for i, flute_ops in enumerate(self.flute_ops_list):
             flute_ops.plot_individual_parts(
-                ax=ax, 
+                ax=ax,
                 flute_names=[flute_names[i]],  # Ensures each flute has its own name in the legend
                 flute_color=colors[i % len(colors)]
             )
 
-        for axis in ax:
-            axis.grid(True, linestyle='--', linewidth=0.5)
-            axis.minorticks_on()
-            axis.grid(which='minor', linestyle=':', linewidth=0.2)
-
         fig.tight_layout(rect=[0, 0.03, 1, 0.95])
         fig.suptitle(", ".join(flute_names), fontsize=12)
-
-        canvas = FigureCanvasTkAgg(fig, master=self.parts_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self._setup_plot_canvas(self.parts_frame, fig)
 
     def update_geometry_plot(self):
+        if not self.flute_ops_list: return
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        linestyles = ['-', '--', '-.', ':']
         fig, ax = plt.subplots(figsize=(20, 12))
         for i, flute_ops in enumerate(self.flute_ops_list):
-            flute_ops.plot_combined_flute_data(ax=ax, flute_color=colors[i % len(colors)], flute_style='-')
-        ax.grid(True, linestyle='--', linewidth=0.5)
-        ax.minorticks_on()
-        ax.grid(which='minor', linestyle=':', linewidth=0.2)
-        for widget in self.geometry_frame.winfo_children():
-            widget.destroy()
-        canvas = FigureCanvasTkAgg(fig, master=self.geometry_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            flute_ops.plot_combined_flute_data(ax=ax, flute_color=colors[i % len(colors)], flute_style=linestyles[i % len(linestyles)])
+        self._setup_plot_canvas(self.geometry_frame, fig)
 
     def update_inharmonic_plot(self):
+        if not self.flute_ops_list or not self.acoustic_analysis_list: return
         notes = list(self.finger_frequencies.keys()) if self.finger_frequencies else []
-        fig = self.flute_ops_list[0]._plot_summary_cents_differences(self.acoustic_analysis_list, notes)
-        ax = fig.axes[0]
-        ax.grid(True, linestyle='--', linewidth=0.5)
-        ax.minorticks_on()
-        ax.grid(which='minor', linestyle=':', linewidth=0.2)
-        for widget in self.inharmonic_frame.winfo_children():
-            widget.destroy()
-        canvas = FigureCanvasTkAgg(fig, master=self.inharmonic_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        # Usar el método público si se renombró en FluteOperations
+        fig = self.flute_ops_list[0].plot_summary_cents_differences(self.acoustic_analysis_list, notes)
+        self._setup_plot_canvas(self.inharmonic_frame, fig)
 
     def update_moc_plot(self):
+        if not self.flute_ops_list or not self.acoustic_analysis_list: return
         notes = list(self.finger_frequencies.keys()) if self.finger_frequencies else []
         fig = self.flute_ops_list[0].plot_moc_summary(self.acoustic_analysis_list, self.finger_frequencies, notes)
-        ax = fig.axes[0]
-        ax.grid(True, linestyle='--', linewidth=0.5)
-        ax.minorticks_on()
-        ax.grid(which='minor', linestyle=':', linewidth=0.2)
-        for widget in self.moc_frame.winfo_children():
-            widget.destroy()
-        canvas = FigureCanvasTkAgg(fig, master=self.moc_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self._setup_plot_canvas(self.moc_frame, fig)
 
     def update_admittance_note_options(self):
+        if not self.flute_ops_list: # No hay flautas cargadas
+            self.note_combobox['values'] = []
+            self.note_var.set("")
+            # Limpiar el plot de admitancia si existe
+            for widget in self.admittance_plot_frame.winfo_children():
+                widget.destroy()
+            return
+            
         if self.finger_frequencies:
             notes = list(self.finger_frequencies.keys())
             self.note_combobox['values'] = notes
@@ -264,37 +281,23 @@ class App(tk.Tk):
         selected_note = self.note_var.get()
         if not selected_note or not self.flute_ops_list:
             return
-        fig = self.flute_ops_list[0]._plot_individual_admittance(self.acoustic_analysis_list, selected_note)
-        ax = fig.axes[0]
-        ax.grid(True, linestyle='--', linewidth=0.5)
-        ax.minorticks_on()
-        ax.grid(which='minor', linestyle=':', linewidth=0.2)
-        for widget in self.admittance_plot_frame.winfo_children():
-            widget.destroy()
-        canvas = FigureCanvasTkAgg(fig, master=self.admittance_plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        # Usar el método público si se renombró en FluteOperations
+        fig = self.flute_ops_list[0].plot_individual_admittance_analysis(self.acoustic_analysis_list, selected_note)
+        self._setup_plot_canvas(self.admittance_plot_frame, fig)
     
     def open_json_editor(self):
         editor = TraditionalTextEditor(self)
         editor.grab_set()
 
     def close_app(self):
-        plt.close('all')  # close all open matplotlib figures
-        self.destroy()    # destroy the main window and end the program
+        plt.close('all')
+        self.destroy()
 
     def update_bi_espe_plot(self):
+        if not self.flute_ops_list or not self.acoustic_analysis_list: return
         notes = list(self.finger_frequencies.keys()) if self.finger_frequencies else []
         fig = self.flute_ops_list[0].plot_bi_espe_summary(self.acoustic_analysis_list, self.finger_frequencies, notes)
-        ax = fig.axes[0]
-        ax.grid(True, linestyle='--', linewidth=0.5)
-        ax.minorticks_on()
-        ax.grid(which='minor', linestyle=':', linewidth=0.2)
-        for widget in self.bi_espe_frame.winfo_children():
-            widget.destroy()
-        canvas = FigureCanvasTkAgg(fig, master=self.bi_espe_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self._setup_plot_canvas(self.bi_espe_frame, fig)
 
 if __name__ == "__main__":
     app = App()
