@@ -8,7 +8,7 @@ from typing import Optional, List, Tuple, Dict
 
 from flute_data import FluteData
 from flute_operations import FluteOperations
-from constants import BASE_COLORS, LINESTYLES 
+from constants import BASE_COLORS, LINESTYLES, FLUTE_PARTS_ORDER
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_JSON_DIR = SCRIPT_DIR / "data_json" 
@@ -196,6 +196,7 @@ class App(tk.Tk):
         self.flute_ops_list: List[FluteOperations] = []
         self.acoustic_analysis_list_for_summary: List[Tuple[dict, str]] = []
         self.finger_frequencies_map_for_summary: Dict[str, Dict[str, float]] = {}
+        self.combined_measurements_list_for_summary: List[Tuple[List[Dict[str, float]], str]] = []
         self.ordered_notes_for_summary: List[str] = []
 
     def _on_frame_configure(self, event=None):
@@ -272,14 +273,11 @@ class App(tk.Tk):
         
         selected_flute_dirs = []
         for flute_dir_name, var in self.flute_checkbox_vars.items():
-            if var.get(): # If the BooleanVar is True (checkbox is checked)
-                # We need to ensure flute_dir_name is actually in self.flute_list_paths
-                # This should be true if populate_flute_selection_ui worked correctly
-                if flute_dir_name in self.flute_list_paths:
-                    selected_flute_dirs.append(flute_dir_name)
-                else:
-                    # This case should ideally not happen if checkbox_vars keys are derived from flute_list_paths
-                    print(f"ADVERTENCIA: {flute_dir_name} está en checkbox_vars pero no en flute_list_paths. Se ignora.")
+            if var.get(): 
+                selected_flute_dirs.append(flute_dir_name)
+        # La condición anterior 'if flute_dir_name in self.flute_list_paths:' se eliminó
+        # ya que las claves de flute_checkbox_vars se derivan directamente de
+        # flute_list_paths en populate_flute_selection_ui.
 
         print(f"DEBUG: En load_flutes - selected_flute_dirs (de checkboxes): {selected_flute_dirs}")
 
@@ -290,6 +288,7 @@ class App(tk.Tk):
         self.flute_ops_list = []
         self.acoustic_analysis_list_for_summary = []
         self.finger_frequencies_map_for_summary = {}
+        self.combined_measurements_list_for_summary = []
         self.ordered_notes_for_summary = []
         
         successful_loads = 0
@@ -305,6 +304,9 @@ class App(tk.Tk):
                 flute_model_name = flute_data_obj.data.get("Flute Model", flute_dir_name)
                 self.acoustic_analysis_list_for_summary.append(
                     (flute_data_obj.acoustic_analysis, flute_model_name)
+                )
+                self.combined_measurements_list_for_summary.append(
+                    (flute_data_obj.combined_measurements, flute_model_name)
                 )
                 self.finger_frequencies_map_for_summary[flute_model_name] = flute_data_obj.finger_frequencies
                 successful_loads +=1
@@ -356,25 +358,71 @@ class App(tk.Tk):
         if not self.flute_ops_list: return
         fig, ax = plt.subplots(figsize=(12, 7))
         for i, flute_ops in enumerate(self.flute_ops_list):
-            flute_model_name = flute_ops.flute_data.data.get("Flute Model", f"Flauta {i+1}")
+            flute_model_name = flute_ops.flute_data.flute_model # Usar el modelo de FluteData
             flute_ops.plot_combined_flute_data(
-                ax=ax, 
-                flute_names=[flute_model_name],
-                flute_color=BASE_COLORS[i % len(BASE_COLORS)], 
+                ax=ax,
+                plot_label=flute_model_name,  # <--- CORRECCIÓN AQUÍ
+                flute_color=BASE_COLORS[i % len(BASE_COLORS)],
                 flute_style=LINESTYLES[i % len(LINESTYLES)]
             )
-        ax.legend(loc='best', title="Flautas")
+        # Si hay múltiples flautas, la leyenda se generará con las etiquetas de cada plot
+        if len(self.flute_ops_list) > 0 : # Solo añadir leyenda si se ploteó algo
+            ax.legend(loc='best', title="Flautas")
+
         ax.set_title("Perfiles Combinados de Flautas")
         self._setup_plot_canvas(self.profile_frame, fig)
 
     def update_parts_plot(self):
         if not self.flute_ops_list: return
-        target_flute_ops = self.flute_ops_list[0]
-        flute_model_name = target_flute_ops.flute_data.data.get("Flute Model", "Flauta Seleccionada")
-        fig, _ = target_flute_ops.plot_individual_parts(
-            flute_names=[flute_model_name],
-            flute_color=BASE_COLORS[0] 
-        )
+
+        fig, axes_array = plt.subplots(2, 2, figsize=(12, 10)) 
+        axes_flat = list(axes_array.flatten()) # [ax_head, ax_left, ax_right, ax_foot]
+
+        flute_names_for_title = []
+
+        for flute_idx, flute_ops_instance in enumerate(self.flute_ops_list):
+            flute_model_name = flute_ops_instance.flute_data.flute_model
+            if flute_model_name not in flute_names_for_title: # Evitar duplicados en el título
+                flute_names_for_title.append(flute_model_name)
+            
+            current_flute_color = BASE_COLORS[flute_idx % len(BASE_COLORS)]
+            current_flute_style = LINESTYLES[flute_idx % len(LINESTYLES)]
+
+            for part_idx, part_name in enumerate(FLUTE_PARTS_ORDER):
+                if part_idx >= len(axes_flat): break
+                
+                ax_part = axes_flat[part_idx]
+                adjusted_positions, diameters = flute_ops_instance._calculate_adjusted_positions(part_name, 0.0)
+
+                if not adjusted_positions or not diameters: continue
+
+                ax_part.plot(adjusted_positions, diameters, marker='.', linestyle=current_flute_style,
+                             color=current_flute_color, markersize=3, label=flute_model_name)
+
+                part_data_dict = flute_ops_instance.flute_data.data.get(part_name, {})
+                hole_positions_part = part_data_dict.get("Holes position", [])
+                hole_diameters_part = part_data_dict.get("Holes diameter", [])
+
+                if hole_positions_part and hole_diameters_part:
+                    min_diam_this_part_this_flute = min(diameters) if diameters else 0
+                    y_pos_for_holes = min_diam_this_part_this_flute - (5 + flute_idx * 1.5) 
+
+                    for h_pos, h_diam in zip(hole_positions_part, hole_diameters_part):
+                        ax_part.plot(h_pos, y_pos_for_holes, color=current_flute_color,
+                                     marker='o', markersize=max(h_diam * 0.4, 1.5), linestyle='None', alpha=0.7)
+                
+                ax_part.set_title(f"{part_name.capitalize()}", fontsize=9)
+                ax_part.set_xlabel("Posición en parte (mm)", fontsize=8)
+                ax_part.set_ylabel("Diámetro (mm)", fontsize=8)
+                ax_part.grid(True, linestyle=':', alpha=0.5)
+                ax_part.tick_params(axis='both', which='major', labelsize=7)
+
+        for ax_p in axes_flat:
+            handles, labels = ax_p.get_legend_handles_labels()
+            if handles: by_label = dict(zip(labels, handles)); ax_p.legend(by_label.values(), by_label.keys(), loc='best', fontsize=7)
+        
+        fig.suptitle(f"Comparación de Partes Individuales: {', '.join(flute_names_for_title)}", fontsize=11)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
         self._setup_plot_canvas(self.parts_frame, fig)
 
     def update_inharmonic_plot(self):
@@ -420,13 +468,15 @@ class App(tk.Tk):
 
     def update_admittance_plot(self, event: Optional[tk.Event]):
         selected_note = self.note_var.get()
-        if not selected_note or not self.acoustic_analysis_list_for_summary:
+        if not selected_note or not self.acoustic_analysis_list_for_summary or not self.combined_measurements_list_for_summary:
             for widget in self.admittance_plot_frame.winfo_children():
                 widget.destroy()
+            # Podrías añadir un mensaje en el frame indicando que no hay datos.
             return
         
         fig = FluteOperations.plot_individual_admittance_analysis(
             self.acoustic_analysis_list_for_summary, 
+            self.combined_measurements_list_for_summary,
             selected_note
         )
         self._setup_plot_canvas(self.admittance_plot_frame, fig)
