@@ -68,19 +68,19 @@ class GraphicalFluteEditor(tk.Toplevel):
             self.part_frames[part_name] = part_frame
             self._build_part_editor_ui(part_frame, part_name)
 
-        # Buttons
-        button_frame = ttk.Frame(self, padding="10")
-        button_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        # Buttons moved to control_panel
+        button_frame = ttk.Frame(control_panel, padding="10")
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10,0))
 
         self.apply_button = ttk.Button(button_frame, text="Apply Changes", command=self._on_apply)
         self.apply_button.pack(side=tk.LEFT, padx=5)
 
         self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self._on_close)
         self.cancel_button.pack(side=tk.LEFT, padx=5)
-
+        
         self.status_label = ttk.Label(button_frame, text="", foreground="blue")
         self.status_label.pack(side=tk.RIGHT, padx=5)
-
+        
 
     def _build_part_editor_ui(self, parent_frame: ttk.Frame, part_name: str):
         # Lengths
@@ -383,11 +383,62 @@ class GraphicalFluteEditor(tk.Toplevel):
             # Use plot_combined_flute_data for the main profile view
             temp_flute_ops.plot_combined_flute_data(ax=self.ax_plot, plot_label="Current Geometry")
 
-            # Optional: Plot holes on the combined profile if possible
-            # This requires mapping hole positions from part-relative to absolute
-            # This is complex and might be better done in FluteOperations or skipped for simplicity in editor preview
-            # For now, let's skip plotting holes on the combined profile in the editor preview.
+            # --- Visualizar Agujeros ---
+            holes_details_for_plot = []
+            current_part_start_abs_mm = 0.0
+            hole_counter = 0 # For global hole numbering like hole1, hole2... (excluding embouchure)
+            
+            part_data_map = {p_name: self.current_data.get(p_name, {}) for p_name in FLUTE_PARTS_ORDER}
 
+            for i, p_name in enumerate(FLUTE_PARTS_ORDER):
+                part_specific_data = part_data_map.get(p_name)
+                if not part_specific_data: continue
+
+                if i > 0: # Calculate absolute start for parts after headjoint
+                    headjoint_data = part_data_map.get(FLUTE_PARTS_ORDER[0], {})
+                    hj_total_length = headjoint_data.get("Total length", 0.0)
+                    hj_mortise = headjoint_data.get("Mortise length", 0.0)
+
+                    left_data = part_data_map.get(FLUTE_PARTS_ORDER[1], {})
+                    left_total_length = left_data.get("Total length", 0.0)
+                    left_mortise = left_data.get("Mortise length", 0.0)
+
+                    right_data = part_data_map.get(FLUTE_PARTS_ORDER[2], {})
+                    right_total_length = right_data.get("Total length", 0.0)
+                    right_mortise = right_data.get("Mortise length", 0.0)
+
+                    if p_name == FLUTE_PARTS_ORDER[1]: # left
+                        current_part_start_abs_mm = hj_total_length - hj_mortise
+                    elif p_name == FLUTE_PARTS_ORDER[2]: # right
+                        current_part_start_abs_mm = (hj_total_length - hj_mortise) + \
+                                                  (left_total_length - left_mortise)
+                    elif p_name == FLUTE_PARTS_ORDER[3]: # foot
+                        current_part_start_abs_mm = (hj_total_length - hj_mortise) + \
+                                                  (left_total_length - left_mortise) + \
+                                                  (right_total_length - right_mortise)
+                else: # headjoint
+                    current_part_start_abs_mm = 0.0
+
+                hole_positions_rel_mm = part_specific_data.get("Holes position", [])
+                hole_diameters_mm = part_specific_data.get("Holes diameter", [])
+                
+                for j, rel_pos_mm in enumerate(hole_positions_rel_mm):
+                    if j >= len(hole_diameters_mm): break
+                    abs_pos_mm = current_part_start_abs_mm + rel_pos_mm
+                    radius_mm = hole_diameters_mm[j] / 2.0
+                    label = "embouchure" if p_name == FLUTE_PARTS_ORDER[0] and j == 0 else f"hole{hole_counter + 1}"
+                    if not (p_name == FLUTE_PARTS_ORDER[0] and j == 0): hole_counter +=1
+                    
+                    holes_details_for_plot.append({
+                        'label': label,
+                        'position_m': abs_pos_mm / M_TO_MM_FACTOR,
+                        'radius_m': radius_mm / M_TO_MM_FACTOR,
+                        'is_open': True # Visual only, state doesn't matter here
+                    })
+            if holes_details_for_plot:
+                FluteOperations._plot_holes_static(holes_details_for_plot, self.ax_plot, M_TO_MM_FACTOR, default_color='darkred', linewidth=0.5, alpha=0.6)
+            # --- Fin Visualizar Agujeros ---
+            
             self.ax_plot.set_title(f"Geometry Preview: {self.flute_name}", fontsize=10)
             self.ax_plot.set_xlabel("Position (mm)"); self.ax_plot.set_ylabel("Diameter (mm)")
             self.ax_plot.grid(True, linestyle=':', alpha=0.7)

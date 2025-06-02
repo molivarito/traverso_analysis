@@ -23,6 +23,12 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s] - %(message)s')
 logger = logging.getLogger(__name__)
 
+# --- Default Paths ---
+SCRIPT_DIR_EXPERIMENTER = Path(__file__).resolve().parent
+DEFAULT_DATA_DIR_EXPERIMENTER = SCRIPT_DIR_EXPERIMENTER.parent / "data_json"
+if not DEFAULT_DATA_DIR_EXPERIMENTER.exists():
+    DEFAULT_DATA_DIR_EXPERIMENTER = SCRIPT_DIR_EXPERIMENTER / "data_json" # Fallback if structure is different
+
 class FluteExperimentApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -138,7 +144,8 @@ class FluteExperimentApp(tk.Tk):
             canvas_to_draw.draw_idle()
 
     def _load_flute_from_dialog(self):
-        dir_path = filedialog.askdirectory(title="Select Flute Data Directory")
+        initial_dir = str(DEFAULT_DATA_DIR_EXPERIMENTER) if DEFAULT_DATA_DIR_EXPERIMENTER.exists() else "."
+        dir_path = filedialog.askdirectory(title="Select Flute Data Directory", initialdir=initial_dir)
         if not dir_path or not os.path.isdir(dir_path):
             logger.info("Flute loading cancelled or invalid path.")
             return
@@ -465,7 +472,11 @@ class FluteExperimentApp(tk.Tk):
             return
 
         new_name_clean = new_name_suggestion.strip().replace(" ", "_") # Reemplazar espacios para nombre de dir
-        base_save_dir_str = os.path.dirname(self.data_path) if self.data_path else "."
+        
+        # Determine base directory for saving: prefer parent of loaded data, else default data dir, else current dir
+        base_save_dir_str = os.path.dirname(self.data_path) if self.data_path and os.path.isdir(os.path.dirname(self.data_path)) \
+                            else (str(DEFAULT_DATA_DIR_EXPERIMENTER) if DEFAULT_DATA_DIR_EXPERIMENTER.exists() else ".")
+                            
         if not base_save_dir_str: # Si data_path era solo un nombre de archivo
              base_save_dir_str = "." # Guardar en el directorio actual por defecto
 
