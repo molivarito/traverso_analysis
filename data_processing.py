@@ -1,153 +1,229 @@
-import json
-import tempfile
+import json # No usado directamente aquí
+import tempfile # No usado directamente aquí
 from pathlib import Path
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Dict # Any -> Dict
 
-import numpy as np
+import numpy as np # No usado directamente aquí
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from flute_data import FluteData
-from flute_operations import FluteOperations
-from notion_utils import get_json_files_from_notion
+# Asumiendo que FluteData y FluteOperations están disponibles en el path
+# from flute_data import FluteData # No se instancia aquí
+from flute_operations import FluteOperations # Para llamar métodos estáticos
+from constants import BASE_COLORS, COLORMAP_LARGE_NUMBER_OF_FLUTES, LINESTYLES # Importar constantes
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FING_CHART_PATH = "data_json/traverso_fingerchart.txt"
+# DEFAULT_FING_CHART_PATH ya no se usa aquí directamente, se obtiene de FluteData si es necesario
+# SCRIPT_DIR = Path(__file__).resolve().parent # No necesario si no se construye DEFAULT_FING_CHART_PATH aquí
+# DEFAULT_FING_CHART_PATH = SCRIPT_DIR.parent / "data_json" / "traverso_fingerchart.txt"
+# if not DEFAULT_FING_CHART_PATH.exists():
+#     DEFAULT_FING_CHART_PATH = Path("data_json") / "traverso_fingerchart.txt"
 
-def save_plots_to_pdf(flute_operations_list: List[FluteOperations], output_pdf_paths: Tuple[str, str], fing_chart_file_path: str = DEFAULT_FING_CHART_PATH) -> None:
-    """
-    Genera y guarda gráficos combinados de múltiples flautas en archivos PDF.
 
-    Args:
-        flute_operations_list (List[FluteOperations]): Lista de objetos FluteOperations.
-        fing_chart_file_path (str): Ruta al archivo de digitaciones.
-        output_pdf_paths (tuple): Rutas de los archivos PDF (geométricos, acústicos).
-    """
+def save_plots_to_pdf(
+        flute_operations_list: List[FluteOperations], # Lista de instancias de FluteOperations
+        output_pdf_paths: Tuple[str, str],
+        # fing_chart_file_path: str = str(DEFAULT_FING_CHART_PATH) # Obtenido de FluteData
+    ) -> None:
     geometrical_pdf_path, acoustic_pdf_path = output_pdf_paths
 
     try:
-        # Obtener nombres de las flautas
-        flute_names = [fo.flute_data.data.get("Flute Model", "Unknown") for fo in flute_operations_list]
-
-        # Generar colores y estilos
+        flute_names = [fo.flute_data.data.get("Flute Model", f"UnknownFlute_{i}") for i, fo in enumerate(flute_operations_list)]
         num_flutes = len(flute_operations_list)
-        # Usar un colormap para más variedad si hay muchas flautas
-        if num_flutes > 6: # Ejemplo, podrías usar tab10 o tab20
-            colormap = plt.cm.get_cmap('tab10', num_flutes) # 'viridis', 'tab10', 'tab20'
-            flute_colors = [colormap(i) for i in range(num_flutes)]
-        else:
-            base_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'] # Colores por defecto de Matplotlib
-            flute_colors = [base_colors[i % len(base_colors)] for i in range(num_flutes)]
-        flute_styles = ['-', '--', '-.', ':'] * (num_flutes // 4 + 1) # Repetir estilos
 
-        # --- Guardar gráficos geométricos ---
-        geom_pdf_path = Path(geometrical_pdf_path)
-        with PdfPages(geom_pdf_path) as geometrical_pdf:
+        # Generar colores y estilos (similar a como estaba, pero usando constantes)
+        if num_flutes > len(BASE_COLORS):
+            colormap = plt.cm.get_cmap(COLORMAP_LARGE_NUMBER_OF_FLUTES, num_flutes)
+            plot_colors = [colormap(i) for i in range(num_flutes)]
+        else:
+            plot_colors = [BASE_COLORS[i % len(BASE_COLORS)] for i in range(num_flutes)]
+        
+        plot_styles = [LINESTYLES[i % len(LINESTYLES)] for i in range(num_flutes)]
+
+        # --- Guardar gráficos geométricos (mayormente de instancia) ---
+        geom_pdf_path_obj = Path(geometrical_pdf_path)
+        with PdfPages(geom_pdf_path_obj) as geometrical_pdf:
             logger.info("Generando gráficos geométricos...")
 
-            # Gráficos individuales
-            fig_individual, ax_individual = plt.subplots(2, 2, figsize=(14, 8))
-            ax_individual = ax_individual.flatten()
+            # Gráficos individuales de partes (requiere un subplot por flauta o manejo complejo)
+            # Esta parte es compleja si se quieren todas las flautas en una sola figura de subplots.
+            # Por simplicidad, graficaremos las partes de cada flauta en su propia figura.
+            logger.info("Plotting individual parts for each flute...")
             for idx, fo in enumerate(flute_operations_list):
-                fo.plot_individual_parts(ax=ax_individual, flute_names=[flute_names[idx]], flute_color=flute_colors[idx])
-            geometrical_pdf.savefig(fig_individual)
-            plt.close(fig_individual)
+                fig_individual, _ = fo.plot_individual_parts(
+                    flute_names=[flute_names[idx]], 
+                    flute_color=plot_colors[idx]
+                )
+                geometrical_pdf.savefig(fig_individual)
+                plt.close(fig_individual)
 
-            # Partes superpuestas
-            fig_overlapping, ax_overlapping = plt.subplots()
+            # Partes superpuestas (plot_all_parts_overlapping)
+            logger.info("Plotting overlapping parts (sequential display)...")
+            fig_overlapping_seq, ax_overlapping_seq = plt.subplots(figsize=(12,6)) # Ajustar según necesidad
             for idx, fo in enumerate(flute_operations_list):
-                fo.plot_all_parts_overlapping(ax=ax_overlapping, flute_names=[flute_names[idx]], flute_color=flute_colors[idx], flute_style=flute_styles[idx])
-            geometrical_pdf.savefig(fig_overlapping)
-            plt.close(fig_overlapping)
+                fo.plot_all_parts_overlapping(
+                    ax=ax_overlapping_seq, 
+                    flute_names=[flute_names[idx]], 
+                    flute_color=plot_colors[idx], 
+                    flute_style=plot_styles[idx]
+                )
+            ax_overlapping_seq.legend(loc='best', title="Flautas") # Añadir leyenda general
+            geometrical_pdf.savefig(fig_overlapping_seq)
+            plt.close(fig_overlapping_seq)
 
-            # Perfil combinado
-            fig_combined, ax_combined = plt.subplots()
+            # Perfil combinado (plot_combined_flute_data)
+            logger.info("Plotting combined flute profiles...")
+            fig_combined_profile, ax_combined_profile = plt.subplots(figsize=(12,6))
             for idx, fo in enumerate(flute_operations_list):
-                fo.plot_combined_flute_data(ax=ax_combined, flute_names=[flute_names[idx]], flute_color=flute_colors[idx], flute_style=flute_styles[idx])
-            geometrical_pdf.savefig(fig_combined)
-            plt.close(fig_combined)
+                fo.plot_combined_flute_data(
+                    ax=ax_combined_profile, 
+                    flute_names=[flute_names[idx]], 
+                    flute_color=plot_colors[idx], 
+                    flute_style=plot_styles[idx]
+                )
+            ax_combined_profile.legend(loc='best', title="Flautas")
+            geometrical_pdf.savefig(fig_combined_profile)
+            plt.close(fig_combined_profile)
 
-            # Vista 2D
-            fig_2d, ax_2d = plt.subplots()
+            # Vista 2D (plot_flute_2d_view)
+            logger.info("Plotting 2D views...")
+            fig_2d_view, ax_2d_view = plt.subplots(figsize=(15,5)) # Ajustar
             for idx, fo in enumerate(flute_operations_list):
-                fo.plot_flute_2d_view(ax=ax_2d, flute_names=[flute_names[idx]], flute_color=flute_colors[idx], flute_style=flute_styles[idx])
-            geometrical_pdf.savefig(fig_2d)
-            plt.close(fig_2d)
+                fo.plot_flute_2d_view(
+                    ax=ax_2d_view, 
+                    flute_names=[flute_names[idx]], 
+                    flute_color=plot_colors[idx], 
+                    flute_style=plot_styles[idx]
+                )
+            ax_2d_view.legend(loc='best', title="Flautas")
+            geometrical_pdf.savefig(fig_2d_view)
+            plt.close(fig_2d_view)
+            
+            # Geometría del instrumento (plot_instrument_geometry) y Top View (plot_top_view_instrument_geometry)
+            # Estos son por nota. Podríamos elegir una nota representativa o iterar.
+            # Aquí se muestra para una nota "D" por defecto.
+            default_note_for_geom = "D"
+            logger.info(f"Plotting instrument geometry for note {default_note_for_geom}...")
+            for idx, fo in enumerate(flute_operations_list):
+                fig_geom_inst = fo.plot_instrument_geometry(note=default_note_for_geom) # Devuelve fig, ax o solo ax
+                if fig_geom_inst: # Si devuelve figura
+                     geometrical_pdf.savefig(fig_geom_inst)
+                     plt.close(fig_geom_inst)
+                elif isinstance(fig_geom_inst, plt.Axes): # Si devuelve solo ejes
+                     geometrical_pdf.savefig(fig_geom_inst.figure)
+                     plt.close(fig_geom_inst.figure)
 
-            # Geometría del instrumento
-            for fo in flute_operations_list:
-                fig_geometry = fo.plot_instrument_geometry()
-                if fig_geometry:
-                    geometrical_pdf.savefig(fig_geometry)
-                    plt.close(fig_geometry)
 
-            logger.info("Gráficos geométricos guardados en: %s", geometrical_pdf_path)
+                fig_top_view = fo.plot_top_view_instrument_geometry(note=default_note_for_geom)
+                if fig_top_view:
+                    geometrical_pdf.savefig(fig_top_view)
+                    plt.close(fig_top_view)
+            
+            logger.info("Gráficos geométricos guardados en: %s", geom_pdf_path_obj)
 
-        # --- Guardar gráficos acústicos ---
+        # --- Guardar gráficos acústicos (usando métodos estáticos donde aplique) ---
         acoustic_pdf_path_obj = Path(acoustic_pdf_path)
         with PdfPages(acoustic_pdf_path_obj) as acoustic_pdf:
             logger.info("Generando gráficos acústicos...")
 
-            acoustic_analysis_list = [
-                (fo.flute_data.acoustic_analysis, fo.flute_data.data.get("Flute Model", "Unknown"))
-                for fo in flute_operations_list
+            # Lista de análisis acústicos y nombres para métodos estáticos
+            acoustic_analysis_data_list = [
+                (fo.flute_data.acoustic_analysis, fo.flute_data.data.get("Flute Model", f"Unknown_{i}")) 
+                for i, fo in enumerate(flute_operations_list)
             ]
+            # Mapa de frecuencias de digitación por flauta
+            finger_frequencies_map_data = {
+                fo.flute_data.data.get("Flute Model", f"Unknown_{i}"): fo.flute_data.finger_frequencies
+                for i, fo in enumerate(flute_operations_list)
+            }
 
-            # Geometría con fingering
-            for fo in flute_operations_list:
-                try:
-                    fig_top_view = fo.plot_top_view_instrument_geometry(note="D")
-                    if fig_top_view:
-                        acoustic_pdf.savefig(fig_top_view)
-                        plt.close(fig_top_view)
-                        logger.info("Geometría guardada para: %s", fo.flute_data.data.get("Flute Model", "Unknown"))
-                except Exception as e:
-                    logger.exception("Error al graficar la geometría: %s", e)
+            # Necesitamos una lista ordenada común de notas.
+            # Tomar del primer archivo de digitación o construir un conjunto de todas las flautas.
+            # Asumimos que el fing_chart_file_path es el mismo o compatible para todas las flautas cargadas
+            # o que las notas relevantes están en FluteData.finger_frequencies.keys()
+            
+            # Obtener notas comunes de finger_frequencies
+            common_notes_set = set()
+            if flute_operations_list:
+                 # Tomar el orden de la primera flauta como referencia, luego filtrar las que son comunes a todas
+                # o usar todas las notas presentes en finger_frequencies_map_data
+                # Para simplificar, usamos las notas de la primera flauta como base del orden.
+                # Una lógica más robusta buscaría la intersección o unión y ordenaría canónicamente.
+                # fing_chart_path_ref = flute_operations_list[0].flute_data.fing_chart_file # No existe este atributo
+                # Necesitamos el fing_chart_file_path pasado como argumento.
+                # Por ahora, si no se pasa, no podemos obtener el orden canónico.
+                # Usaremos las claves de finger_frequencies de la primera flauta.
+                
+                first_flute_notes = list(flute_operations_list[0].flute_data.finger_frequencies.keys())
+                # Intentar ordenar canónicamente (ej. D, E, Fs, G, A, B, Cs) si es posible
+                # Si no, el orden de `keys()` puede variar.
+                # Definir un orden canónico si es conocido:
+                canonical_note_order = ["D", "D#", "E", "F", "Fs", "G", "G#", "A", "A#", "B", "C", "Cs"] # Ajustar a las notas reales
+                
+                # Filtrar y ordenar notas presentes
+                all_present_notes = set()
+                for ff_map in finger_frequencies_map_data.values():
+                    all_present_notes.update(ff_map.keys())
+                
+                ordered_notes_for_plots = [n for n in canonical_note_order if n in all_present_notes]
+                # Añadir notas no canónicas al final
+                ordered_notes_for_plots.extend(sorted(list(all_present_notes - set(ordered_notes_for_plots))))
 
-            # Orden de notas
-            fing_chart_file = Path(fing_chart_file_path)
-            with fing_chart_file.open("r") as file:
-                header_line = file.readline().strip() # Asumiendo que las notas están en la primera línea
-                ordered_notes = header_line.split()[1:] # Omitir "label"
+            else:
+                ordered_notes_for_plots = []
 
-            common_notes = set()
-            for analysis, _ in acoustic_analysis_list:
-                common_notes.update(analysis.keys())
-            common_notes = [note for note in ordered_notes if note in common_notes]
+
+            if not ordered_notes_for_plots:
+                logger.warning("No se pudieron determinar notas ordenadas para los gráficos de resumen acústico.")
             
             # Admitancia combinada
-            fig_combined_adm = flute_operations_list[0].plot_combined_admittance(acoustic_analysis_list) # Usar método público
+            logger.info("Plotting combined admittance...")
+            fig_combined_adm = FluteOperations.plot_combined_admittance(acoustic_analysis_data_list)
             acoustic_pdf.savefig(fig_combined_adm)
             plt.close(fig_combined_adm)
 
             # Frecuencias antiresonantes
-            fig_antiresonances = flute_operations_list[0].plot_summary_antiresonances(acoustic_analysis_list, common_notes) # Usar método público
-            acoustic_pdf.savefig(fig_antiresonances)
-            plt.close(fig_antiresonances)
-            # Diferencias en cents
-            fig_cents = flute_operations_list[0].plot_summary_cents_differences(acoustic_analysis_list, common_notes) # Usar método público
-            acoustic_pdf.savefig(fig_cents)
-            plt.close(fig_cents)
-            # Gráfico de MOC
-            fig_moc = flute_operations_list[0].plot_moc_summary(acoustic_analysis_list, flute_operations_list[0].flute_data.finger_frequencies)
-            acoustic_pdf.savefig(fig_moc)
-            plt.close(fig_moc)
+            if ordered_notes_for_plots:
+                logger.info("Plotting summary of antiresonances...")
+                fig_antiresonances = FluteOperations.plot_summary_antiresonances(acoustic_analysis_data_list, ordered_notes_for_plots)
+                acoustic_pdf.savefig(fig_antiresonances)
+                plt.close(fig_antiresonances)
+            
+                # Diferencias en cents
+                logger.info("Plotting summary of cents differences...")
+                fig_cents = FluteOperations.plot_summary_cents_differences(acoustic_analysis_data_list, ordered_notes_for_plots)
+                acoustic_pdf.savefig(fig_cents)
+                plt.close(fig_cents)
+            
+                # Gráfico de MOC
+                logger.info("Plotting MOC summary...")
+                fig_moc = FluteOperations.plot_moc_summary(acoustic_analysis_data_list, finger_frequencies_map_data, ordered_notes_for_plots)
+                acoustic_pdf.savefig(fig_moc)
+                plt.close(fig_moc)
 
-            # Gráfico de BI y ESPE
-            fig_bi_espe = flute_operations_list[0].plot_bi_espe_summary(acoustic_analysis_list, flute_operations_list[0].flute_data.finger_frequencies)
-            acoustic_pdf.savefig(fig_bi_espe)
-            plt.close(fig_bi_espe)
+                # Gráfico de BI y ESPE
+                logger.info("Plotting B_I and ESPE summary...")
+                fig_bi_espe = FluteOperations.plot_bi_espe_summary(acoustic_analysis_data_list, finger_frequencies_map_data, ordered_notes_for_plots)
+                acoustic_pdf.savefig(fig_bi_espe)
+                plt.close(fig_bi_espe)
 
             # Admitancia individual por nota
-            for note in common_notes:
-                fig_indiv = flute_operations_list[0].plot_individual_admittance_analysis(acoustic_analysis_list, note) # Usar método público
-                acoustic_pdf.savefig(fig_indiv)
-                plt.close(fig_indiv)
+            # Iterar sobre notas comunes o todas las notas presentes.
+            # 'ordered_notes_for_plots' es una buena lista para esto.
+            if ordered_notes_for_plots:
+                logger.info("Plotting individual admittance analysis per note...")
+                for note_to_plot in ordered_notes_for_plots:
+                    try:
+                        fig_indiv_adm = FluteOperations.plot_individual_admittance_analysis(acoustic_analysis_data_list, note_to_plot)
+                        acoustic_pdf.savefig(fig_indiv_adm)
+                        plt.close(fig_indiv_adm)
+                    except Exception as e_indiv_adm:
+                        logger.error(f"Error graficando admitancia individual para nota {note_to_plot}: {e_indiv_adm}")
 
 
-            logger.info("Gráficos acústicos guardados en: %s", acoustic_pdf_path)
+            logger.info("Gráficos acústicos guardados en: %s", acoustic_pdf_path_obj)
     except Exception as e:
         logger.exception("Error al guardar gráficos en los PDF: %s", e)

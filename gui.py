@@ -3,37 +3,41 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
+from pathlib import Path 
+from typing import Optional, List, Tuple, Dict 
 
 from flute_data import FluteData
 from flute_operations import FluteOperations
+from constants import BASE_COLORS, LINESTYLES 
 
-DEFAULT_DATA_JSON_DIR = "../data_json"
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_DATA_JSON_DIR = SCRIPT_DIR / "data_json" 
+if not DEFAULT_DATA_JSON_DIR.exists():
+     DEFAULT_DATA_JSON_DIR = SCRIPT_DIR.parent / "data_json"
 
 class TraditionalTextEditor(tk.Toplevel):
     def __init__(self, master=None):
         super().__init__(master)
-        self.title("Traditional Editor")
+        self.title("Editor JSON Tradicional")
         self.geometry("800x600")
         self.filename = None
         self.create_widgets()
 
     def create_widgets(self):
-        # Toolbar with traditional buttons
         toolbar = ttk.Frame(self)
         toolbar.pack(side=tk.TOP, fill=tk.X)
-        btn_open = ttk.Button(toolbar, text="Open", command=self.open_file)
+        btn_open = ttk.Button(toolbar, text="Abrir", command=self.open_file)
         btn_open.pack(side=tk.LEFT, padx=2, pady=2)
-        btn_save = ttk.Button(toolbar, text="Save", command=self.save_file)
+        btn_save = ttk.Button(toolbar, text="Guardar", command=self.save_file)
         btn_save.pack(side=tk.LEFT, padx=2, pady=2)
-        btn_save_as = ttk.Button(toolbar, text="Save As", command=self.save_as)
+        btn_save_as = ttk.Button(toolbar, text="Guardar Como", command=self.save_as)
         btn_save_as.pack(side=tk.LEFT, padx=2, pady=2)
-        btn_close = ttk.Button(toolbar, text="Close", command=self.close_file)
+        btn_close = ttk.Button(toolbar, text="Cerrar Archivo", command=self.close_file)
         btn_close.pack(side=tk.LEFT, padx=2, pady=2)
-        btn_exit = ttk.Button(toolbar, text="Exit", command=self.exit_editor)
+        btn_exit = ttk.Button(toolbar, text="Salir Editor", command=self.exit_editor)
         btn_exit.pack(side=tk.LEFT, padx=2, pady=2)
         
-        # Text widget with scrollbars for editing content
-        self.text = tk.Text(self, wrap=tk.NONE)
+        self.text = tk.Text(self, wrap=tk.WORD)
         self.text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
@@ -45,7 +49,11 @@ class TraditionalTextEditor(tk.Toplevel):
         self.text.configure(xscrollcommand=hsb.set)
 
     def open_file(self):
-        file_path = filedialog.askopenfilename(title="Open File", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
+        file_path = filedialog.askopenfilename(
+            title="Abrir Archivo JSON", 
+            filetypes=[("Archivos JSON", "*.json"), ("Todos los archivos", "*.*")],
+            initialdir=str(DEFAULT_DATA_JSON_DIR) 
+        )
         if file_path:
             self.filename = file_path
             try:
@@ -53,8 +61,9 @@ class TraditionalTextEditor(tk.Toplevel):
                     content = f.read()
                 self.text.delete("1.0", tk.END)
                 self.text.insert(tk.END, content)
+                self.title(f"Editor JSON - {os.path.basename(file_path)}")
             except Exception as e:
-                messagebox.showerror("Error", f"Error opening file:\n{e}")
+                messagebox.showerror("Error Abriendo Archivo", f"No se pudo abrir el archivo:\n{e}")
 
     def save_file(self):
         if not self.filename:
@@ -62,21 +71,28 @@ class TraditionalTextEditor(tk.Toplevel):
         else:
             try:
                 with open(self.filename, "w", encoding="utf-8") as f:
-                    f.write(self.text.get("1.0", tk.END))
-                messagebox.showinfo("Saved", "File saved successfully.")
+                    f.write(self.text.get("1.0", tk.END).strip() + "\n")
+                messagebox.showinfo("Guardado", f"Archivo guardado exitosamente:\n{self.filename}")
             except Exception as e:
-                messagebox.showerror("Error", f"Error saving file:\n{e}")
+                messagebox.showerror("Error Guardando Archivo", f"No se pudo guardar el archivo:\n{e}")
 
     def save_as(self):
-        file_path = filedialog.asksaveasfilename(title="Save As", defaultextension=".json",
-                                                 filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
+        initial_dir_path = os.path.dirname(self.filename) if self.filename else str(DEFAULT_DATA_JSON_DIR)
+        file_path = filedialog.asksaveasfilename(
+            title="Guardar Archivo Como", 
+            defaultextension=".json",
+            filetypes=[("Archivos JSON", "*.json"), ("Todos los archivos", "*.*")],
+            initialdir=initial_dir_path
+        )
         if file_path:
             self.filename = file_path
             self.save_file()
+            self.title(f"Editor JSON - {os.path.basename(file_path)}")
 
     def close_file(self):
         self.filename = None
         self.text.delete("1.0", tk.END)
+        self.title("Editor JSON Tradicional")
 
     def exit_editor(self):
         self.destroy()
@@ -84,205 +100,335 @@ class TraditionalTextEditor(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Flute Analysis")
+        self.title("Análisis de Flautas")
         self.geometry("1200x800")
         
-        # Top bar to place the "Exit" button at the top right
+        self.data_dir = str(DEFAULT_DATA_JSON_DIR)
+        self.flute_list_paths: List[str] = [] 
+        self.flute_checkbox_vars: Dict[str, tk.BooleanVar] = {} # For Checkbuttons
+
+        print(f"DEBUG: App.__init__ - ID(self): {id(self)}")
+        print(f"DEBUG: App.__init__ - BEFORE populate - self.flute_list_paths: {self.flute_list_paths}, ID: {id(self.flute_list_paths)}")
+        print(f"DEBUG: App.__init__ - BEFORE populate - self.flute_checkbox_vars: {self.flute_checkbox_vars}")
+
+
+        style = ttk.Style(self)
+        # style.theme_use('clam') 
+
         top_bar = ttk.Frame(self)
         top_bar.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
-        exit_button = ttk.Button(top_bar, text="Exit", command=self.close_app)
+        exit_button = ttk.Button(top_bar, text="Salir de Aplicación", command=self.close_app)
         exit_button.pack(side=tk.RIGHT)
         
-        # Frame for selecting flute(s) and opening the popup editor
-        selection_frame = ttk.Frame(self)
-        selection_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+        selection_outer_frame = ttk.LabelFrame(self, text="Selección de Flautas", padding=(10,5))
+        selection_outer_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(selection_frame, text="Select one or more flutes:").pack(side=tk.LEFT)
-        
-        self.data_dir = DEFAULT_DATA_JSON_DIR # Se puede hacer configurable
-        browse_button = ttk.Button(selection_frame, text="Browse Data Dir", command=self.browse_data_directory)
-        browse_button.pack(side=tk.LEFT, padx=5)
+        # Directory selection row
+        dir_selection_row = ttk.Frame(selection_outer_frame)
+        dir_selection_row.pack(fill=tk.X, pady=(0,5))
+        ttk.Label(dir_selection_row, text="Directorio de Datos:").pack(side=tk.LEFT, padx=(0,5))
+        self.data_dir_label = ttk.Label(dir_selection_row, text=self.data_dir, relief="sunken", width=50)
+        self.data_dir_label.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0,5))
+        browse_button = ttk.Button(dir_selection_row, text="Cambiar Directorio", command=self.browse_data_directory)
+        browse_button.pack(side=tk.LEFT)
 
-        # Listbox for multiple selection
-        self.flute_list = []
-        self.flute_listbox = tk.Listbox(selection_frame, selectmode=tk.EXTENDED, height=6)
-        self.populate_flute_listbox() # Llenar inicialmente
-        self.flute_listbox.pack(side=tk.LEFT, padx=10)
+        # Flute selection area (with scrollable checkbuttons)
+        flute_list_area_frame = ttk.Frame(selection_outer_frame)
+        flute_list_area_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(flute_list_area_frame, text="Flautas Disponibles:").pack(anchor="w", padx=(0,5))
+
+        # Canvas for scrollable checkbuttons
+        self.flute_selection_canvas = tk.Canvas(flute_list_area_frame, borderwidth=0, background="#ffffff")
+        self.flute_selection_frame = ttk.Frame(self.flute_selection_canvas) # Frame to hold checkbuttons
         
-        # Mover la inicialización de flute_list y flute_listbox a un método
-        if not self.flute_list:
-            self.flute_listbox.insert(tk.END, "No flutes in default directory")
+        self.flute_scrollbar = ttk.Scrollbar(flute_list_area_frame, orient="vertical", command=self.flute_selection_canvas.yview)
+        self.flute_selection_canvas.configure(yscrollcommand=self.flute_scrollbar.set)
+
+        self.flute_scrollbar.pack(side="right", fill="y")
+        self.flute_selection_canvas.pack(side="left", fill="both", expand=True)
+        self.canvas_frame_id = self.flute_selection_canvas.create_window((0, 0), window=self.flute_selection_frame, anchor="nw")
+
+        self.flute_selection_frame.bind("<Configure>", self._on_frame_configure)
+        self.flute_selection_canvas.bind("<Configure>", self._on_canvas_configure)
+
+
+        # Buttons frame (Load, Editor)
+        button_frame = ttk.Frame(selection_outer_frame) 
+        button_frame.pack(fill=tk.X, pady=(5,0))
+        load_button = ttk.Button(button_frame, text="Cargar Seleccionadas", command=self.load_flutes)
+        load_button.pack(side=tk.LEFT, padx=(0,10))
+        editor_button = ttk.Button(button_frame, text="Editor JSON", command=self.open_json_editor)
+        editor_button.pack(side=tk.LEFT)
         
-        load_button = ttk.Button(selection_frame, text="Load", command=self.load_flutes)
-        load_button.pack(side=tk.LEFT, padx=10)
+        self.populate_flute_selection_ui() 
+        print(f"DEBUG: App.__init__ - AFTER populate - self.flute_list_paths: {self.flute_list_paths}, ID: {id(self.flute_list_paths)}")
+        print(f"DEBUG: App.__init__ - AFTER populate - self.flute_checkbox_vars: {self.flute_checkbox_vars}")
         
-        # Button to open the traditional editor in a popup
-        editor_button = ttk.Button(selection_frame, text="JSON Editor", command=self.open_json_editor)
-        editor_button.pack(side=tk.LEFT, padx=10)
-        
-        # Create a Notebook with tabs for different graphs
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(expand=1, fill='both')
+        self.notebook.pack(expand=True, fill='both', padx=10, pady=10)
         
-        # New tab "Parts" and others
-        self.geometry_frame = ttk.Frame(self.notebook)
+        self.profile_frame = ttk.Frame(self.notebook)
         self.parts_frame = ttk.Frame(self.notebook)
+        self.admittance_frame = ttk.Frame(self.notebook)
         self.inharmonic_frame = ttk.Frame(self.notebook)
         self.moc_frame = ttk.Frame(self.notebook)
-        self.admittance_frame = ttk.Frame(self.notebook)
-        
-        self.notebook.add(self.geometry_frame, text="Profile")
-        self.notebook.add(self.parts_frame, text="Parts")
-        self.notebook.add(self.admittance_frame, text="Admittance")
-        self.notebook.add(self.inharmonic_frame, text="Inharmonicity")
-        self.notebook.add(self.moc_frame, text="MOC")
         self.bi_espe_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.bi_espe_frame, text="B_I & ESPE")
+
+        self.notebook.add(self.profile_frame, text="Perfil Combinado")
+        self.notebook.add(self.parts_frame, text="Partes Individuales")
+        self.notebook.add(self.admittance_frame, text="Admitancia (por Nota)")
+        self.notebook.add(self.inharmonic_frame, text="Inharmonicidad (Resumen)")
+        self.notebook.add(self.moc_frame, text="MOC (Resumen)")
+        self.notebook.add(self.bi_espe_frame, text="B_I & ESPE (Resumen)")
         
-        # Admittance tab: Combobox to choose the note
         note_selection_frame = ttk.Frame(self.admittance_frame)
-        note_selection_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
-        ttk.Label(note_selection_frame, text="Select note:").pack(side=tk.LEFT)
+        note_selection_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        ttk.Label(note_selection_frame, text="Seleccionar nota:").pack(side=tk.LEFT, padx=(0,5))
         self.note_var = tk.StringVar()
-        self.note_combobox = ttk.Combobox(note_selection_frame, textvariable=self.note_var, state="readonly")
-        self.note_combobox.pack(side=tk.LEFT, padx=5)
+        self.note_combobox = ttk.Combobox(note_selection_frame, textvariable=self.note_var, state="readonly", width=10)
+        self.note_combobox.pack(side=tk.LEFT)
         self.note_combobox.bind("<<ComboboxSelected>>", self.update_admittance_plot)
         
-        # Frame to contain the Admittance plot
         self.admittance_plot_frame = ttk.Frame(self.admittance_frame)
         self.admittance_plot_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Variables to store loaded flute analysis instances
-        self.flute_ops_list = []  # List of FluteOperations
-        self.acoustic_analysis_list = []  # List of tuples (acoustic_analysis, flute_model)
-        self.finger_frequencies = {}  # Taken from the first loaded flute
+        self.flute_ops_list: List[FluteOperations] = []
+        self.acoustic_analysis_list_for_summary: List[Tuple[dict, str]] = []
+        self.finger_frequencies_map_for_summary: Dict[str, Dict[str, float]] = {}
+        self.ordered_notes_for_summary: List[str] = []
+
+    def _on_frame_configure(self, event=None):
+        # Update scrollregion to encompass the inner frame
+        self.flute_selection_canvas.configure(scrollregion=self.flute_selection_canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event=None):
+        # Resize the inner frame to match the canvas width
+        canvas_width = self.flute_selection_canvas.winfo_width()
+        self.flute_selection_canvas.itemconfig(self.canvas_frame_id, width=canvas_width)
+
 
     def browse_data_directory(self):
-        dir_path = filedialog.askdirectory(initialdir=".", title="Select Flute Data Directory")
+        dir_path = filedialog.askdirectory(initialdir=self.data_dir, title="Seleccionar Directorio de Datos de Flautas")
         if dir_path:
             self.data_dir = dir_path
-            self.populate_flute_listbox()
+            self.data_dir_label.config(text=self.data_dir)
+            self.populate_flute_selection_ui()
 
-    def populate_flute_listbox(self):
-        self.flute_listbox.delete(0, tk.END)
-        if os.path.exists(self.data_dir) and os.path.isdir(self.data_dir):
-            self.flute_list = [d for d in os.listdir(self.data_dir) if os.path.isdir(os.path.join(self.data_dir, d))]
-            for flute in self.flute_list:
-                self.flute_listbox.insert(tk.END, flute)
-        else:
-            self.flute_listbox.insert(tk.END, f"Directory not found: {self.data_dir}")
-    def load_flutes(self):
-        selected_indices = self.flute_listbox.curselection()
-        if not selected_indices:
-            messagebox.showerror("Error", "Please select at least one flute.")
-            return
-        selected_flautas = [self.flute_list[i] for i in selected_indices]
-        
-        self.flute_ops_list = []
-        self.acoustic_analysis_list = []
-        self.finger_frequencies = {}
-        
-        for flute in selected_flautas:
-            data_path = os.path.join(self.data_dir, flute)
-            try:
-                flute_data = FluteData(data_path)
-                flute_ops = FluteOperations(flute_data)
-                self.flute_ops_list.append(flute_ops)
-                self.acoustic_analysis_list.append((flute_data.acoustic_analysis, flute_data.data.get("Flute Model", flute)))
-                if not self.finger_frequencies:
-                    self.finger_frequencies = flute_data.finger_frequencies
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not load flute {flute}: {e}")
-        
-        if not self.flute_ops_list:
-            return
-        
-        self.update_parts_plot()
-        self.update_geometry_plot()
-        self.update_inharmonic_plot()
-        self.update_moc_plot()
-        self.update_admittance_note_options()
-        self.update_bi_espe_plot()
-
-    def _setup_plot_canvas(self, parent_frame: ttk.Frame, fig: plt.Figure):
-        """Helper para limpiar frame y dibujar canvas."""
-        for widget in parent_frame.winfo_children():
+    def populate_flute_selection_ui(self):
+        # Clear previous checkbuttons from the frame
+        for widget in self.flute_selection_frame.winfo_children():
             widget.destroy()
         
-        # Aplicar estilo común a los ejes de la figura
-        for ax in fig.get_axes():
-            ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
-            ax.minorticks_on()
-            ax.grid(which='minor', linestyle=':', linewidth=0.3, alpha=0.5)
+        self.flute_checkbox_vars.clear()
+        temp_flute_paths = [] 
+        current_data_dir = Path(self.data_dir)
+        
+        print(f"DEBUG: populate_flute_selection_ui - ID(self): {id(self)}")
+        print(f"DEBUG: populate_flute_selection_ui - Attempting to populate from: {current_data_dir}")
 
+        if not (current_data_dir.exists() and current_data_dir.is_dir()):
+            ttk.Label(self.flute_selection_frame, text=f" (Directorio no encontrado: {self.data_dir})", foreground="red").pack(anchor="w")
+            self.flute_list_paths = [] 
+            print(f"DEBUG: populate_flute_selection_ui - data_dir '{self.data_dir}' is invalid. flute_list_paths set to []. ID: {id(self.flute_list_paths)}")
+            self._on_frame_configure() # Update scrollregion
+            return
+
+        try:
+            sub_dir_names = []
+            for item_name in os.listdir(current_data_dir):
+                if (current_data_dir / item_name).is_dir():
+                    sub_dir_names.append(item_name)
+            
+            print(f"DEBUG: populate_flute_selection_ui - Found subdirectories: {sub_dir_names}")
+
+            if not sub_dir_names:
+                ttk.Label(self.flute_selection_frame, text=" (No hay subdirectorios de flautas aquí)", foreground="grey").pack(anchor="w")
+                self.flute_list_paths = [] 
+            else:
+                # Sort and store paths
+                self.flute_list_paths = sorted(sub_dir_names)
+                for flute_dir_name in self.flute_list_paths:
+                    var = tk.BooleanVar(value=False)
+                    cb = ttk.Checkbutton(self.flute_selection_frame, text=flute_dir_name, variable=var)
+                    cb.pack(anchor="w", padx=5, pady=1) # pady reduced for compactness
+                    self.flute_checkbox_vars[flute_dir_name] = var
+            
+        except OSError as e:
+            ttk.Label(self.flute_selection_frame, text=f" (Error listando directorio: {e.strerror})", foreground="red").pack(anchor="w")
+            self.flute_list_paths = [] 
+            print(f"DEBUG: populate_flute_selection_ui - OSError: {e}. flute_list_paths set to []. ID: {id(self.flute_list_paths)}")
+            self._on_frame_configure() # Update scrollregion
+            return 
+
+        self._on_frame_configure() # Update scrollregion after adding widgets
+        print(f"DEBUG: populate_flute_selection_ui - FINAL self.flute_list_paths: {self.flute_list_paths}, ID: {id(self.flute_list_paths)}")
+        print(f"DEBUG: populate_flute_selection_ui - FINAL self.flute_checkbox_vars: {self.flute_checkbox_vars}")
+            
+    def load_flutes(self):
+        print(f"DEBUG: En load_flutes - ID(self): {id(self)}")
+        print(f"DEBUG: En load_flutes - self.flute_list_paths (al inicio): {self.flute_list_paths}, ID: {id(self.flute_list_paths)}")
+        print(f"DEBUG: En load_flutes - self.flute_checkbox_vars (al inicio): {self.flute_checkbox_vars}")
+        
+        selected_flute_dirs = []
+        for flute_dir_name, var in self.flute_checkbox_vars.items():
+            if var.get(): # If the BooleanVar is True (checkbox is checked)
+                # We need to ensure flute_dir_name is actually in self.flute_list_paths
+                # This should be true if populate_flute_selection_ui worked correctly
+                if flute_dir_name in self.flute_list_paths:
+                    selected_flute_dirs.append(flute_dir_name)
+                else:
+                    # This case should ideally not happen if checkbox_vars keys are derived from flute_list_paths
+                    print(f"ADVERTENCIA: {flute_dir_name} está en checkbox_vars pero no en flute_list_paths. Se ignora.")
+
+        print(f"DEBUG: En load_flutes - selected_flute_dirs (de checkboxes): {selected_flute_dirs}")
+
+        if not selected_flute_dirs:
+            messagebox.showwarning("Sin Selección", "Por favor, seleccione al menos una flauta marcando la casilla correspondiente.")
+            return
+        
+        self.flute_ops_list = []
+        self.acoustic_analysis_list_for_summary = []
+        self.finger_frequencies_map_for_summary = {}
+        self.ordered_notes_for_summary = []
+        
+        successful_loads = 0
+        for flute_dir_name in selected_flute_dirs:
+            data_path = Path(self.data_dir) / flute_dir_name
+            try:
+                print(f"DEBUG: load_flutes - Intentando cargar FluteData desde: {data_path}")
+                flute_data_obj = FluteData(str(data_path))
+                print(f"DEBUG: load_flutes - FluteData cargada para: {flute_dir_name}")
+                flute_ops_obj = FluteOperations(flute_data_obj)
+                
+                self.flute_ops_list.append(flute_ops_obj)
+                flute_model_name = flute_data_obj.data.get("Flute Model", flute_dir_name)
+                self.acoustic_analysis_list_for_summary.append(
+                    (flute_data_obj.acoustic_analysis, flute_model_name)
+                )
+                self.finger_frequencies_map_for_summary[flute_model_name] = flute_data_obj.finger_frequencies
+                successful_loads +=1
+            except Exception as e:
+                detailed_error_msg = f"No se pudo cargar la flauta desde '{flute_dir_name}'.\n"
+                detailed_error_msg += f"Ruta completa: {data_path}\n"
+                detailed_error_msg += f"Error: {type(e).__name__}: {e}\n\n"
+                detailed_error_msg += "Verifique que el directorio contenga los archivos JSON necesarios (headjoint.json, etc.) y que tengan el formato correcto."
+                messagebox.showerror("Error de Carga", detailed_error_msg)
+                print(f"ERROR: load_flutes - Excepción al cargar {flute_dir_name}: {e}") 
+        
+        if not successful_loads and selected_flute_dirs:
+             messagebox.showinfo("Carga Fallida", "No se pudo cargar ninguna de las flautas seleccionadas que parecían válidas.")
+             return
+        
+        if successful_loads > 0:
+            messagebox.showinfo("Carga Exitosa", f"Se cargaron {successful_loads} flauta(s) exitosamente.")
+            
+            if self.finger_frequencies_map_for_summary:
+                all_present_notes = set()
+                for ff_map in self.finger_frequencies_map_for_summary.values():
+                    all_present_notes.update(ff_map.keys())
+                
+                canonical_order = ["D", "D#", "E", "F", "Fs", "G", "G#", "A", "A#", "B", "C", "Cs"] 
+                self.ordered_notes_for_summary = [n for n in canonical_order if n in all_present_notes]
+                self.ordered_notes_for_summary.extend(sorted(list(all_present_notes - set(self.ordered_notes_for_summary))))
+
+            self.update_all_plots()
+            self.update_admittance_note_options()
+
+    def _setup_plot_canvas(self, parent_frame: ttk.Frame, fig: plt.Figure):
+        for widget in parent_frame.winfo_children():
+            widget.destroy()
         canvas = FigureCanvasTkAgg(fig, master=parent_frame)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         return canvas
+
+    def update_all_plots(self):
+        if not self.flute_ops_list: return
+        self.update_profile_plot()
+        self.update_parts_plot()
+        self.update_inharmonic_plot()
+        self.update_moc_plot()
+        self.update_bi_espe_plot()
+
+    def update_profile_plot(self):
+        if not self.flute_ops_list: return
+        fig, ax = plt.subplots(figsize=(12, 7))
+        for i, flute_ops in enumerate(self.flute_ops_list):
+            flute_model_name = flute_ops.flute_data.data.get("Flute Model", f"Flauta {i+1}")
+            flute_ops.plot_combined_flute_data(
+                ax=ax, 
+                flute_names=[flute_model_name],
+                flute_color=BASE_COLORS[i % len(BASE_COLORS)], 
+                flute_style=LINESTYLES[i % len(LINESTYLES)]
+            )
+        ax.legend(loc='best', title="Flautas")
+        ax.set_title("Perfiles Combinados de Flautas")
+        self._setup_plot_canvas(self.profile_frame, fig)
 
     def update_parts_plot(self):
         if not self.flute_ops_list: return
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-        ax = axes.flatten()
-
-        flute_names = [ops.flute_data.data.get("Flute Model", f"Flute {i}") 
-                    for i, ops in enumerate(self.flute_ops_list, start=1)]
-
-        for i, flute_ops in enumerate(self.flute_ops_list):
-            flute_ops.plot_individual_parts(
-                ax=ax,
-                flute_names=[flute_names[i]],  # Ensures each flute has its own name in the legend
-                flute_color=colors[i % len(colors)]
-            )
-
-        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-        fig.suptitle(", ".join(flute_names), fontsize=12)
+        target_flute_ops = self.flute_ops_list[0]
+        flute_model_name = target_flute_ops.flute_data.data.get("Flute Model", "Flauta Seleccionada")
+        fig, _ = target_flute_ops.plot_individual_parts(
+            flute_names=[flute_model_name],
+            flute_color=BASE_COLORS[0] 
+        )
         self._setup_plot_canvas(self.parts_frame, fig)
 
-    def update_geometry_plot(self):
-        if not self.flute_ops_list: return
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-        linestyles = ['-', '--', '-.', ':']
-        fig, ax = plt.subplots(figsize=(20, 12))
-        for i, flute_ops in enumerate(self.flute_ops_list):
-            flute_ops.plot_combined_flute_data(ax=ax, flute_color=colors[i % len(colors)], flute_style=linestyles[i % len(linestyles)])
-        self._setup_plot_canvas(self.geometry_frame, fig)
-
     def update_inharmonic_plot(self):
-        if not self.flute_ops_list or not self.acoustic_analysis_list: return
-        notes = list(self.finger_frequencies.keys()) if self.finger_frequencies else []
-        # Usar el método público si se renombró en FluteOperations
-        fig = self.flute_ops_list[0].plot_summary_cents_differences(self.acoustic_analysis_list, notes)
+        if not self.acoustic_analysis_list_for_summary or not self.ordered_notes_for_summary: return
+        fig = FluteOperations.plot_summary_cents_differences(
+            self.acoustic_analysis_list_for_summary, 
+            self.ordered_notes_for_summary
+        )
         self._setup_plot_canvas(self.inharmonic_frame, fig)
 
     def update_moc_plot(self):
-        if not self.flute_ops_list or not self.acoustic_analysis_list: return
-        notes = list(self.finger_frequencies.keys()) if self.finger_frequencies else []
-        fig = self.flute_ops_list[0].plot_moc_summary(self.acoustic_analysis_list, self.finger_frequencies, notes)
+        if not self.acoustic_analysis_list_for_summary or not self.ordered_notes_for_summary or not self.finger_frequencies_map_for_summary: return
+        fig = FluteOperations.plot_moc_summary(
+            self.acoustic_analysis_list_for_summary, 
+            self.finger_frequencies_map_for_summary,
+            self.ordered_notes_for_summary
+        )
         self._setup_plot_canvas(self.moc_frame, fig)
 
+    def update_bi_espe_plot(self):
+        if not self.acoustic_analysis_list_for_summary or not self.ordered_notes_for_summary or not self.finger_frequencies_map_for_summary: return
+        fig = FluteOperations.plot_bi_espe_summary(
+            self.acoustic_analysis_list_for_summary,
+            self.finger_frequencies_map_for_summary,
+            self.ordered_notes_for_summary
+        )
+        self._setup_plot_canvas(self.bi_espe_frame, fig)
+
     def update_admittance_note_options(self):
-        if not self.flute_ops_list: # No hay flautas cargadas
+        if not self.ordered_notes_for_summary:
             self.note_combobox['values'] = []
             self.note_var.set("")
-            # Limpiar el plot de admitancia si existe
             for widget in self.admittance_plot_frame.winfo_children():
                 widget.destroy()
             return
             
-        if self.finger_frequencies:
-            notes = list(self.finger_frequencies.keys())
-            self.note_combobox['values'] = notes
-            self.note_var.set(notes[0])
-            self.update_admittance_plot(None)
+        self.note_combobox['values'] = self.ordered_notes_for_summary
+        if self.ordered_notes_for_summary:
+            self.note_var.set(self.ordered_notes_for_summary[0])
+            self.update_admittance_plot(event=None)
+        else:
+            self.note_var.set("")
 
-    def update_admittance_plot(self, event):
+    def update_admittance_plot(self, event: Optional[tk.Event]):
         selected_note = self.note_var.get()
-        if not selected_note or not self.flute_ops_list:
+        if not selected_note or not self.acoustic_analysis_list_for_summary:
+            for widget in self.admittance_plot_frame.winfo_children():
+                widget.destroy()
             return
-        # Usar el método público si se renombró en FluteOperations
-        fig = self.flute_ops_list[0].plot_individual_admittance_analysis(self.acoustic_analysis_list, selected_note)
+        
+        fig = FluteOperations.plot_individual_admittance_analysis(
+            self.acoustic_analysis_list_for_summary, 
+            selected_note
+        )
         self._setup_plot_canvas(self.admittance_plot_frame, fig)
     
     def open_json_editor(self):
@@ -290,15 +436,18 @@ class App(tk.Tk):
         editor.grab_set()
 
     def close_app(self):
-        plt.close('all')
-        self.destroy()
-
-    def update_bi_espe_plot(self):
-        if not self.flute_ops_list or not self.acoustic_analysis_list: return
-        notes = list(self.finger_frequencies.keys()) if self.finger_frequencies else []
-        fig = self.flute_ops_list[0].plot_bi_espe_summary(self.acoustic_analysis_list, self.finger_frequencies, notes)
-        self._setup_plot_canvas(self.bi_espe_frame, fig)
+        if messagebox.askokcancel("Salir", "¿Está seguro de que desea salir de la aplicación?"):
+            plt.close('all')
+            self.destroy()
 
 if __name__ == "__main__":
+    # import logging
+    # log_format = '%(asctime)s - %(levelname)s - %(name)s - %(funcName)s - %(message)s'
+    # logging.basicConfig(level=logging.INFO, format=log_format) 
+    # logging.getLogger('matplotlib').setLevel(logging.WARNING)
+    # logger = logging.getLogger(__name__) 
+    # logger.info("Iniciando la aplicación Flute Analyzer.")
+        
     app = App()
+    app.protocol("WM_DELETE_WINDOW", app.close_app)
     app.mainloop()
