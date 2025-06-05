@@ -10,7 +10,7 @@ import json
 import os
 import copy
 from pathlib import Path # <--- AÑADIR ESTA LÍNEA
-from typing import Dict, Any, Optional # <--- AÑADIR ESTA LÍNEA
+from typing import Dict, Any, Optional, List, Tuple # <--- AÑADIR ESTA LÍNEA
 
 from flute_data import FluteData, DEFAULT_FING_CHART_PATH # <--- MODIFICAR ESTA LÍNEA
 from flute_operations import FluteOperations
@@ -18,9 +18,10 @@ from flute_operations import FluteOperations
 # Necesitarás asegurarte de que este import funcione en tu estructura de proyecto.
 # Si está en el mismo directorio, esto debería estar bien.
 from graphical_editor import GraphicalFluteEditor
+from constants import FLUTE_PARTS_ORDER # <--- LÍNEA AÑADIDA
 
 import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s] - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Default Paths ---
@@ -340,12 +341,40 @@ class FluteExperimentApp(tk.Tk):
                 # Para diferenciar, podemos añadir "(Original)" al source_name que pasamos a FluteData
                 # o manejar la etiqueta aquí si es necesario.
                 # Asumimos que FluteData para original_flute_ops tiene un nombre como "FluteName"
-                # y para modified_flute_ops "FluteName_mod"
+                # y para modified_flute_ops "FluteName_mod".
+                # La función plot_combined_flute_data ahora solo dibuja el perfil.
+                # Necesitamos dibujar los agujeros por separado.
                 self.original_flute_ops.plot_combined_flute_data(
                     ax=ax, plot_label=f"{self.original_flute_ops.flute_data.flute_model} (Original)",
                     flute_color='blue', flute_style='-')
                 if ax.lines: legend_handles.append(ax.lines[-1])
                 plot_success = True
+
+                # Dibujar agujeros para el original
+                min_diam_orig = np.inf
+                if self.original_flute_ops.flute_data.combined_measurements:
+                    min_diam_orig = min(m['diameter'] for m in self.original_flute_ops.flute_data.combined_measurements if 'diameter' in m)
+                
+                y_pos_holes_orig = (min_diam_orig if min_diam_orig != np.inf else 10) - 5 # 5mm por debajo del mínimo
+
+                current_abs_pos = 0.0
+                for part_name in FLUTE_PARTS_ORDER:
+                    part_data = self.original_flute_ops.flute_data.data.get(part_name, {})
+                    hole_positions = part_data.get("Holes position", [])
+                    hole_diameters = part_data.get("Holes diameter", [])
+                    
+                    for h_pos, h_diam in zip(hole_positions, hole_diameters):
+                        abs_hole_pos = current_abs_pos + h_pos
+                        marker_size_hole = max(h_diam * 0.5, 2) 
+                        ax.plot(abs_hole_pos, y_pos_holes_orig, 'o', color='blue', markersize=marker_size_hole, alpha=0.6)
+                    
+                    # Actualizar current_abs_pos para la siguiente parte (solo cuerpo)
+                    total_length = part_data.get("Total length", 0.0)
+                    mortise_length = part_data.get("Mortise length", 0.0)
+                    if FLUTE_PARTS_ORDER.index(part_name) < len(FLUTE_PARTS_ORDER) -1 : # No sumar para la última parte
+                        current_abs_pos += (total_length - mortise_length)
+
+
             except Exception as e: logger.error(f"Error plotting original geometry: {e}")
 
         if self.has_modifications and self.modified_flute_data_dict:
@@ -361,6 +390,30 @@ class FluteExperimentApp(tk.Tk):
                     ax=ax, plot_label=f"{self.flute_name} (Modificada)",
                     flute_color='orange', flute_style='--')
                 if len(ax.lines) > len(legend_handles): legend_handles.append(ax.lines[-1]) # Añadir la última línea
+
+                # Dibujar agujeros para el modificado
+                min_diam_mod = np.inf
+                if temp_mod_ops.flute_data.combined_measurements: # Usar los combined_measurements del temp_mod_ops
+                    min_diam_mod = min(m['diameter'] for m in temp_mod_ops.flute_data.combined_measurements if 'diameter' in m)
+
+                y_pos_holes_mod = (min_diam_mod if min_diam_mod != np.inf else 10) - 7 # Un poco más abajo para diferenciar
+
+                current_abs_pos_mod = 0.0
+                for part_name_mod in FLUTE_PARTS_ORDER:
+                    part_data_mod = temp_mod_ops.flute_data.data.get(part_name_mod, {})
+                    hole_positions_mod = part_data_mod.get("Holes position", [])
+                    hole_diameters_mod = part_data_mod.get("Holes diameter", [])
+
+                    for h_pos_m, h_diam_m in zip(hole_positions_mod, hole_diameters_mod):
+                        abs_hole_pos_m = current_abs_pos_mod + h_pos_m
+                        marker_size_hole_m = max(h_diam_m * 0.5, 2)
+                        ax.plot(abs_hole_pos_m, y_pos_holes_mod, 'x', color='orange', markersize=marker_size_hole_m, alpha=0.6)
+                    
+                    total_length_mod = part_data_mod.get("Total length", 0.0)
+                    mortise_length_mod = part_data_mod.get("Mortise length", 0.0)
+                    if FLUTE_PARTS_ORDER.index(part_name_mod) < len(FLUTE_PARTS_ORDER) -1 :
+                        current_abs_pos_mod += (total_length_mod - mortise_length_mod)
+
                 plot_success = True
             except Exception as e: logger.error(f"Error plotting modified geometry from dict: {e}")
 

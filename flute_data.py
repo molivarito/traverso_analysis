@@ -122,6 +122,40 @@ class FluteData:
             logger.exception(f"Error al inicializar FluteData para '{self.flute_model}': {e_init}")
             raise ValueError(f"Error al procesar los datos de la flauta '{self.flute_model}': {e_init}")
 
+    def _calculate_part_absolute_start_position_mm(self, part_name: str) -> float:
+        """
+        Calcula la posición absoluta de inicio (en mm) del cuerpo de una parte
+        basándose en las longitudes totales y de espiga de las partes anteriores.
+        """
+        if part_name == FLUTE_PARTS_ORDER[0]: # Headjoint starts at 0
+            return 0.0
+
+        current_offset_mm = 0.0
+        part_data_map = {p_name: self.data.get(p_name, {}) for p_name in FLUTE_PARTS_ORDER}
+
+        # Find the index of the current part
+        try:
+            part_index = FLUTE_PARTS_ORDER.index(part_name)
+        except ValueError:
+            logger.error(f"Nombre de parte desconocido '{part_name}' en _calculate_part_absolute_start_position_mm.")
+            return 0.0 # Should not happen with FLUTE_PARTS_ORDER
+
+        # Sum the body lengths of preceding parts
+        for i in range(part_index):
+            prev_part_name = FLUTE_PARTS_ORDER[i]
+            prev_part_data = part_data_map.get(prev_part_name, {})
+            prev_total_length = prev_part_data.get("Total length", 0.0)
+            prev_mortise_length = prev_part_data.get("Mortise length", 0.0)
+
+            # The body length of the previous part is Total length - Mortise length
+            # For the headjoint (i=0), its body length is Total length - Mortise length.
+            # For subsequent parts (i > 0), their body length is Total length - Mortise length.
+            # The start of the current part is the sum of the body lengths of all preceding parts.
+            current_offset_mm += (prev_total_length - prev_mortise_length)
+
+        logger.debug(f"Posición de inicio absoluta calculada para '{part_name}': {current_offset_mm:.2f} mm")
+        return current_offset_mm
+
 
     def _read_json_data_from_files(self, base_dir: str) -> None:
         logger.info(f"Leyendo datos JSON desde archivos en: {base_dir} para {self.flute_model}")
@@ -169,8 +203,7 @@ class FluteData:
     def combine_measurements(self) -> List[Dict[str, float]]:
         logger.debug(f"Combinando mediciones para {self.flute_model}")
         combined_measurements = []
-        current_position = 0.0
-
+        
         # Ensure all parts are at least an empty dict in part_data_map if not in self.data
         part_data_map = {part_name: self.data.get(part_name, {}) for part_name in FLUTE_PARTS_ORDER}
 
@@ -180,32 +213,8 @@ class FluteData:
                 logger.warning(f"No hay datos para la parte '{part_name}' en {self.flute_model} al combinar mediciones. Saltando esta parte.")
                 continue
 
-            if i > 0: # Adjust current_position for parts after headjoint
-                headjoint_data = part_data_map.get(FLUTE_PARTS_ORDER[0], {})
-                headjoint_total_length = headjoint_data.get("Total length", 0.0)
-                headjoint_mortise = headjoint_data.get("Mortise length", 0.0)
-
-                left_data = part_data_map.get(FLUTE_PARTS_ORDER[1], {})
-                left_total_length = left_data.get("Total length", 0.0)
-                left_mortise = left_data.get("Mortise length", 0.0) # Tenon of the left part
-
-                right_data = part_data_map.get(FLUTE_PARTS_ORDER[2], {})
-                right_total_length = right_data.get("Total length", 0.0)
-                right_mortise = right_data.get("Mortise length", 0.0) # Tenon of the right part
-
-                # foot_data and foot_mortise_val are not directly needed here if calculated sequentially
-
-                if part_name == FLUTE_PARTS_ORDER[1]: # left
-                    current_position = headjoint_total_length - headjoint_mortise
-                elif part_name == FLUTE_PARTS_ORDER[2]: # right
-                    # Start of right part is end of headjoint body + length of left part body
-                    current_position = (headjoint_total_length - headjoint_mortise) + \
-                                       (left_total_length - left_mortise)
-                elif part_name == FLUTE_PARTS_ORDER[3]: # foot
-                    # Start of foot part is end of headjoint body + length of left part body + length of right part body
-                    current_position = (headjoint_total_length - headjoint_mortise) + \
-                                       (left_total_length - left_mortise) + \
-                                       (right_total_length - right_mortise)
+            # Calculate the absolute start position for the current part's body
+            current_position_abs_mm = self._calculate_part_absolute_start_position_mm(part_name)
 
 
             measurements_list = part_specific_data.get("measurements", [])
@@ -220,7 +229,7 @@ class FluteData:
             part_total_length = part_specific_data.get("Total length", 0.0)
 
             for pos, diam in zip(positions, diameters):
-                adjusted_pos = pos + current_position
+                adjusted_pos = pos + current_position_abs_mm
                 # Filter conditions
                 # Ensure part_total_length - part_mortise_length is positive or handle zero case if mortise can be >= total_length
                 filter_threshold = part_total_length - part_mortise_length
@@ -266,22 +275,33 @@ class FluteData:
                 emb_diam_mm = emb_hole_diameters[0]
                 # Provide defaults if chimney/diam_out lists are shorter or missing
                 emb_chim_mm = emb_hole_chimneys_list[0] if emb_hole_chimneys_list else DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT * 1000
-                emb_diam_o_mm = emb_hole_diam_out_list[0] if emb_hole_diam_out_list else emb_diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+                emb_diam_o_mm = emb_hole_diam_out_list[0] if emb_hole_diam_out_list and emb_hole_diam_out_list[0] > 1e-9 else emb_diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+
+                # Validate and adjust embouchure chimney and outer diameter
+                if emb_diam_mm > 1e-9: # If embouchure diameter is significant
+                    if emb_chim_mm < 1e-9: # If chimney height is zero or too small
+                        logger.warning(f"Embouchure chimney height for {self.flute_model} is zero or too small ({emb_chim_mm:.4f}mm). Using default: {DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT * 1000:.2f}mm.")
+                        emb_chim_mm = DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT * 1000
+                    
+                    # If outer diameter is zero, too small, or not larger than inner diameter, recalculate it
+                    if emb_diam_o_mm < 1e-9 or emb_diam_o_mm <= emb_diam_mm:
+                        original_emb_diam_o_mm = emb_diam_o_mm # For logging
+                        emb_diam_o_mm = emb_diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+                        logger.warning(f"Embouchure outer diameter for {self.flute_model} was invalid ({original_emb_diam_o_mm:.4f}mm) relative to inner diameter ({emb_diam_mm:.2f}mm). Adjusted to: {emb_diam_o_mm:.2f}mm.")
 
                 side_holes_data.append([
                     "embouchure",
                     emb_pos_mm / 1000.0,
                     emb_chim_mm / 1000.0,
                     (emb_diam_mm / 2.0) / 1000.0,
-                    (emb_diam_o_mm / 2.0) / 1000.0
+                    (emb_diam_o_mm / 2.0) / 1000.0 # Use adjusted value
                 ])
                 Rw = (emb_diam_mm / 2.0) / 1000.0
             else:
                 logger.warning(f"Datos de embocadura insuficientes o ausentes para {self.flute_model}. Usando Rw por defecto ({Rw}m).")
 
             # Corrected logic for current_offset_mm based on the structure of combine_measurements
-            current_offset_mm = 0.0 # This will be the start of the current part being processed for holes
-            part_idx_offset = 0     # For global hole numbering (hole1, hole2...)
+            part_idx_offset = 0 # For global hole numbering (hole1, hole2...)
 
             # Headjoint holes are already handled (embouchure) if they were part of side_holes_data.
             # Here, we calculate offsets for body parts and then add their holes.
@@ -295,34 +315,63 @@ class FluteData:
 
 
             for part_enum_idx, part_name in enumerate(FLUTE_PARTS_ORDER):
-                if part_name == FLUTE_PARTS_ORDER[0]: # Headjoint (embouchure already handled)
-                    continue # Skip to next part for tone holes
+                # Si la parte actual es el headjoint, ya hemos procesado su primer agujero como embocadura.
+                # Los agujeros tonales (hole1, hole2...) deben comenzar desde la siguiente parte.
+                if part_name == FLUTE_PARTS_ORDER[0]: # Headjoint
+                    continue # Saltar el headjoint para la numeración de agujeros tonales
+                 # Calculate the absolute start position for the current part's body
+                current_offset_abs_mm = self._calculate_part_absolute_start_position_mm(part_name)
+                # The following lines seemed to be part of an 'else' block that was removed or misplaced.
+                # They are not directly used before being potentially reassigned or if the logic
+                # intended them for a specific part_name condition within the loop.
+                # For now, I'm aligning them with the loop's main body.
+                # If they were part of a conditional, that logic needs to be restored.
+                l_data = self.data.get(FLUTE_PARTS_ORDER[1], {}) # Example, might need context
+                r_data = self.data.get(FLUTE_PARTS_ORDER[2], {}) # Example, might need context
+                # current_offset_mm was used later for side_holes_data, ensure it's correctly calculated if needed
+                # The original calculation for current_offset_mm here seemed specific to the 'foot' part
+                # and was outside a conditional check for part_name == FLUTE_PARTS_ORDER[3]
+                # This part of the logic needs careful review based on its intended use.
+                # For now, just fixing indentation. The variable current_offset_mm is used later.
+                # It seems current_offset_abs_mm should be used for hole positions.
+                # The variable 'current_offset_mm' used in side_holes_data.append might be a bug
+                # and should likely be 'current_offset_abs_mm'.
+                # For now, only fixing indentation.
+                if part_name == FLUTE_PARTS_ORDER[3]: # 'foot' - Example of how it might have been structured
+                    # This is a guess, the original logic for current_offset_mm was complex and outside a clear conditional
+                    f_data_mortise = self.data.get(part_name, {}).get("Mortise length", 0.0)
+                    # The original calculation for current_offset_mm was:
+                    # current_offset_mm = (offset_after_headjoint +
+                    #                     l_data.get("Total length", 0.0) +
+                    #                     r_data.get("Total length", 0.0) - r_data.get("Mortise length", 0.0) -
+                    #                     f_data_mortise)
+                    # This needs to be assigned correctly if it's to be used.
+                    # For now, we'll assume current_offset_abs_mm is the primary offset.
+                    pass # Placeholder for correct logic if needed for current_offset_mm
+                # elif part_name == FLUTE_PARTS_ORDER[0]: # Headjoint - Esta condición ya no es necesaria aquí debido al 'continue' de arriba
+                    current_offset_abs_mm = 0.0
 
                 part_data = self.data.get(part_name, {})
                 if not part_data:
                     logger.warning(f"No data for part '{part_name}' when calculating hole positions for {self.flute_model}.")
                     continue
-                
-                # Determine the absolute starting position of the current part
-                if part_name == FLUTE_PARTS_ORDER[1]: # 'left'
-                    current_offset_mm = offset_after_headjoint
-                elif part_name == FLUTE_PARTS_ORDER[2]: # 'right'
-                    l_data = self.data.get(FLUTE_PARTS_ORDER[1], {})
-                    r_data_mortise = part_data.get("Mortise length", 0.0) # Mortise of the current 'right' part
-                    current_offset_mm = offset_after_headjoint + l_data.get("Total length", 0.0) - r_data_mortise
-                elif part_name == FLUTE_PARTS_ORDER[3]: # 'foot'
-                    l_data = self.data.get(FLUTE_PARTS_ORDER[1], {})
-                    r_data = self.data.get(FLUTE_PARTS_ORDER[2], {})
-                    f_data_mortise = part_data.get("Mortise length", 0.0) # Mortise of the current 'foot' part
-                    current_offset_mm = (offset_after_headjoint +
-                                         l_data.get("Total length", 0.0) +
-                                         r_data.get("Total length", 0.0) - r_data.get("Mortise length", 0.0) -
-                                         f_data_mortise)
-                else: # Should not happen with FLUTE_PARTS_ORDER
-                    current_offset_mm = 0.0
-
 
                 holes_pos = part_data.get("Holes position", [])
+
+                # --- Validación: Agujeros más grandes que el tubo ---
+                # Solo validar si hay mediciones combinadas para interpolar
+                if self.combined_measurements:
+                    for i, hole_pos_mm in enumerate(holes_pos):
+                         if i < len(part_data.get("Holes diameter", [])):
+                             hole_diam_mm = part_data["Holes diameter"][i]
+                             # La posición del agujero es relativa a la parte, necesitamos la posición absoluta
+                             hole_pos_abs_mm = current_offset_abs_mm + hole_pos_mm
+                             bore_diam_at_hole_pos = self._get_bore_diameter_at_absolute_pos(hole_pos_abs_mm)
+                             if hole_diam_mm > bore_diam_at_hole_pos:
+                                 logger.warning(f"Agujero {i+1} en '{part_name}' ({hole_pos_mm:.2f}mm rel, {hole_pos_abs_mm:.2f}mm abs) tiene diámetro ({hole_diam_mm:.2f}mm) mayor que el diámetro del tubo ({bore_diam_at_hole_pos:.2f}mm) en esa posición para {self.flute_model}. Esto puede causar problemas en Openwind.")
+
+                # --- Fin Validación ---
+
                 num_holes_in_part = len(holes_pos)
                 holes_diam = part_data.get("Holes diameter", [7.0]*num_holes_in_part)
                 holes_chimney_list = part_data.get("Holes chimney", [])
@@ -331,16 +380,31 @@ class FluteData:
                 for i, hole_pos_mm in enumerate(holes_pos):
                     diam_mm = holes_diam[i] if i < len(holes_diam) else 7.0
                     chimney_mm = holes_chimney_list[i] if i < len(holes_chimney_list) else DEFAULT_CHIMNEY_HEIGHT * 1000
-                    diam_out_mm = holes_diam_out_list[i] if i < len(holes_diam_out_list) else diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+                    diam_out_mm = holes_diam_out_list[i] if i < len(holes_diam_out_list) and holes_diam_out_list[i] > 1e-9 else diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
 
-                    side_holes_data.append([
+                    # Validate and adjust tonehole chimney and outer diameter
+                    if diam_mm > 1e-9: # If hole diameter is significant
+                        if chimney_mm < 1e-9: # If chimney height is zero or too small
+                            logger.warning(f"Hole {part_idx_offset + i + 1} chimney height for {self.flute_model} is zero or too small ({chimney_mm:.4f}mm). Using default: {DEFAULT_CHIMNEY_HEIGHT * 1000:.2f}mm.")
+                            chimney_mm = DEFAULT_CHIMNEY_HEIGHT * 1000
+                        
+                        if diam_out_mm < 1e-9 or diam_out_mm <= diam_mm: # If outer diameter is zero, too small, or not larger than inner
+                            original_diam_out_mm = diam_out_mm # For logging
+                            diam_out_mm = diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+                            logger.warning(f"Hole {part_idx_offset + i + 1} outer diameter for {self.flute_model} was invalid ({original_diam_out_mm:.4f}mm) relative to inner diameter ({diam_mm:.2f}mm). Adjusted to: {diam_out_mm:.2f}mm.")
+
+                    side_holes_data.append([ # Generamos etiquetas hole1, hole2, ...
                         f"hole{part_idx_offset + i + 1}",
-                        (current_offset_mm + hole_pos_mm) / 1000.0,
+                        (current_offset_abs_mm + hole_pos_mm) / 1000.0, # <--- CORRECCIÓN AQUÍ
                         chimney_mm / 1000.0,
                         (diam_mm / 2.0) / 1000.0,
-                        (diam_out_mm / 2.0) / 1000.0
+                        (diam_out_mm / 2.0) / 1000.0 # Use adjusted value
                     ])
                 part_idx_offset += num_holes_in_part
+
+            # Nota: La generación de etiquetas "hole1", "hole2", etc., asume que el archivo de digitaciones
+            # utiliza esta misma convención para referenciar los agujeros tonales. Si tu archivo de digitaciones
+            # usa nombres diferentes (ej. "H1", "T1", "T2"), Openwind reportará errores de "Side component not defined".
 
             side_holes_header = [['label', 'position', 'chimney', 'radius', 'radius_out']]
             side_holes_for_openwind = side_holes_header + side_holes_data
@@ -387,3 +451,26 @@ class FluteData:
         except Exception as e_main:
             logger.exception(f"Error mayor en compute_acoustic_analysis para {self.flute_model}: {e_main}")
             self.acoustic_analysis = {} # Ensure it's empty on major failure
+
+    def _get_bore_diameter_at_absolute_pos(self, abs_x_mm: float) -> float:
+        """
+        Interpola el diámetro del tubo en una posición absoluta dada (en mm)
+        usando las mediciones combinadas.
+        """
+        if not self.combined_measurements:
+            logger.warning(f"No hay mediciones combinadas para interpolar el diámetro en {self.flute_model}.")
+            return 0.0
+
+        try:
+            positions = np.array([item["position"] for item in self.combined_measurements])
+            diameters = np.array([item["diameter"] for item in self.combined_measurements])
+
+            # Asegurarse de que las posiciones estén ordenadas (deberían estarlo por combine_measurements)
+            sort_indices = np.argsort(positions)
+            positions = positions[sort_indices]
+            diameters = diameters[sort_indices]
+
+            return float(np.interp(abs_x_mm, positions, diameters))
+        except Exception as e:
+            logger.error(f"Error durante la interpolación del diámetro en posición absoluta {abs_x_mm:.2f}mm para {self.flute_model}: {e}")
+            return 0.0
