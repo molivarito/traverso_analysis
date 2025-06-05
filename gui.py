@@ -121,7 +121,8 @@ class App(tk.Tk):
         exit_button.pack(side=tk.RIGHT)
         
         selection_outer_frame = ttk.LabelFrame(self, text="Selección de Flautas", padding=(10,5))
-        selection_outer_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+        # No llenar en X, dejar que tome el ancho de su contenido. pady reducido.
+        selection_outer_frame.pack(side=tk.TOP, fill=tk.NONE, expand=False, padx=10, pady=(5,2))
         
         # Directory selection row
         dir_selection_row = ttk.Frame(selection_outer_frame)
@@ -134,19 +135,23 @@ class App(tk.Tk):
 
         # Flute selection area (with scrollable checkbuttons)
         flute_list_area_frame = ttk.Frame(selection_outer_frame)
-        flute_list_area_frame.pack(fill=tk.BOTH, expand=True)
+        # No expandir, dejar que tome la altura necesaria o una fija
+        flute_list_area_frame.pack(fill=tk.X, expand=False, pady=(2,0)) 
 
         ttk.Label(flute_list_area_frame, text="Flautas Disponibles:").pack(anchor="w", padx=(0,5))
 
-        # Canvas for scrollable checkbuttons
-        self.flute_selection_canvas = tk.Canvas(flute_list_area_frame, borderwidth=0, background="#ffffff")
+        # Canvas for scrollable checkbuttons - limitar su altura
+        # Establecer una altura fija más pequeña, por ejemplo, para 2-3 items.
+        # La altura de un checkbutton es aprox 20-25px.
+        self.flute_selection_canvas = tk.Canvas(flute_list_area_frame, borderwidth=0, background="#ffffff", height=60) # Altura para aprox. 3 items
         self.flute_selection_frame = ttk.Frame(self.flute_selection_canvas) # Frame to hold checkbuttons
         
         self.flute_scrollbar = ttk.Scrollbar(flute_list_area_frame, orient="vertical", command=self.flute_selection_canvas.yview)
         self.flute_selection_canvas.configure(yscrollcommand=self.flute_scrollbar.set)
 
         self.flute_scrollbar.pack(side="right", fill="y")
-        self.flute_selection_canvas.pack(side="left", fill="both", expand=True)
+        # El canvas se expandirá horizontalmente, pero su altura está fijada por el parámetro 'height'
+        self.flute_selection_canvas.pack(side="left", fill=tk.X, expand=True)
         self.canvas_frame_id = self.flute_selection_canvas.create_window((0, 0), window=self.flute_selection_frame, anchor="nw")
 
         self.flute_selection_frame.bind("<Configure>", self._on_frame_configure)
@@ -154,7 +159,7 @@ class App(tk.Tk):
 
 
         # Buttons frame (Load, Editor)
-        button_frame = ttk.Frame(selection_outer_frame) 
+        button_frame = ttk.Frame(selection_outer_frame) # pady reducido
         button_frame.pack(fill=tk.X, pady=(5,0))
         load_button = ttk.Button(button_frame, text="Cargar Seleccionadas", command=self.load_flutes)
         load_button.pack(side=tk.LEFT, padx=(0,10))
@@ -166,7 +171,7 @@ class App(tk.Tk):
         print(f"DEBUG: App.__init__ - AFTER populate - self.flute_checkbox_vars: {self.flute_checkbox_vars}")
         
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(expand=True, fill='both', padx=10, pady=10)
+        self.notebook.pack(expand=True, fill='both', padx=10, pady=(2,10)) # Reducir pady top aún más
         
         self.profile_frame = ttk.Frame(self.notebook)
         self.parts_frame = ttk.Frame(self.notebook)
@@ -205,8 +210,10 @@ class App(tk.Tk):
 
     def _on_canvas_configure(self, event=None):
         # Resize the inner frame to match the canvas width
-        canvas_width = self.flute_selection_canvas.winfo_width()
+        canvas_width = event.width # Usar el ancho del evento
         self.flute_selection_canvas.itemconfig(self.canvas_frame_id, width=canvas_width)
+        # La altura del canvas ya está fijada en su creación.
+        # El scrollregion se actualiza en _on_frame_configure cuando el contenido del frame interno cambia.
 
 
     def browse_data_directory(self):
@@ -276,11 +283,11 @@ class App(tk.Tk):
             if var.get(): 
                 selected_flute_dirs.append(flute_dir_name)
         # La condición anterior 'if flute_dir_name in self.flute_list_paths:' se eliminó
-        # ya que las claves de flute_checkbox_vars se derivan directamente de
-        # flute_list_paths en populate_flute_selection_ui.
 
         print(f"DEBUG: En load_flutes - selected_flute_dirs (de checkboxes): {selected_flute_dirs}")
 
+        # Reiniciar listas antes de cargar nuevas flautas
+        self.flute_ops_list = []
         if not selected_flute_dirs:
             messagebox.showwarning("Sin Selección", "Por favor, seleccione al menos una flauta marcando la casilla correspondiente.")
             return
@@ -290,7 +297,7 @@ class App(tk.Tk):
         self.finger_frequencies_map_for_summary = {}
         self.combined_measurements_list_for_summary = []
         self.ordered_notes_for_summary = []
-        
+
         successful_loads = 0
         for flute_dir_name in selected_flute_dirs:
             data_path = Path(self.data_dir) / flute_dir_name
@@ -301,15 +308,17 @@ class App(tk.Tk):
                 flute_ops_obj = FluteOperations(flute_data_obj)
                 
                 self.flute_ops_list.append(flute_ops_obj)
-                flute_model_name = flute_data_obj.data.get("Flute Model", flute_dir_name)
+                # Usar flute_model de FluteData que ya está normalizado
+                flute_model_name = flute_data_obj.flute_model 
                 self.acoustic_analysis_list_for_summary.append(
                     (flute_data_obj.acoustic_analysis, flute_model_name)
                 )
                 self.combined_measurements_list_for_summary.append(
                     (flute_data_obj.combined_measurements, flute_model_name)
                 )
-                self.finger_frequencies_map_for_summary[flute_model_name] = flute_data_obj.finger_frequencies
-                successful_loads +=1
+                if flute_data_obj.finger_frequencies: # Asegurarse que no es None
+                    self.finger_frequencies_map_for_summary[flute_model_name] = flute_data_obj.finger_frequencies
+                successful_loads += 1
             except Exception as e:
                 detailed_error_msg = f"No se pudo cargar la flauta desde '{flute_dir_name}'.\n"
                 detailed_error_msg += f"Ruta completa: {data_path}\n"
@@ -323,7 +332,8 @@ class App(tk.Tk):
              return
         
         if successful_loads > 0:
-            messagebox.showinfo("Carga Exitosa", f"Se cargaron {successful_loads} flauta(s) exitosamente.")
+            # messagebox.showinfo("Carga Exitosa", f"Se cargaron {successful_loads} flauta(s) exitosamente.")
+            print(f"INFO: Se cargaron {successful_loads} flauta(s) exitosamente.") # Log en consola en su lugar
             
             if self.finger_frequencies_map_for_summary:
                 all_present_notes = set()
@@ -365,6 +375,31 @@ class App(tk.Tk):
                 flute_color=BASE_COLORS[i % len(BASE_COLORS)],
                 flute_style=LINESTYLES[i % len(LINESTYLES)]
             )
+            # Dibujar agujeros para esta flauta
+            if flute_ops.flute_data.combined_measurements:
+                min_diam_profile = min(m['diameter'] for m in flute_ops.flute_data.combined_measurements if 'diameter' in m) if flute_ops.flute_data.combined_measurements else 10
+                y_pos_holes = min_diam_profile - (5 + i * 0.5) # Pequeño offset para cada flauta
+
+                current_abs_pos_holes = 0.0
+                for part_name_hole in FLUTE_PARTS_ORDER:
+                    part_data_hole = flute_ops.flute_data.data.get(part_name_hole, {})
+                    hole_positions_rel = part_data_hole.get("Holes position", [])
+                    hole_diameters_rel = part_data_hole.get("Holes diameter", [])
+
+                    for h_pos, h_diam in zip(hole_positions_rel, hole_diameters_rel):
+                        abs_hole_pos = current_abs_pos_holes + h_pos
+                        # Dibujar el agujero como un marcador circular 'o'
+                        marker_size_scaled = max(h_diam * 0.8, 3) # Ajustar factor de escala si es necesario
+                        ax.plot(abs_hole_pos, y_pos_holes, 
+                                marker='o', color=BASE_COLORS[i % len(BASE_COLORS)], 
+                                markersize=marker_size_scaled, 
+                                linestyle='None', alpha=0.7)
+
+                    total_length_part = part_data_hole.get("Total length", 0.0)
+                    mortise_length_part = part_data_hole.get("Mortise length", 0.0)
+                    if FLUTE_PARTS_ORDER.index(part_name_hole) < len(FLUTE_PARTS_ORDER) -1 :
+                        current_abs_pos_holes += (total_length_part - mortise_length_part)
+
         # Si hay múltiples flautas, la leyenda se generará con las etiquetas de cada plot
         if len(self.flute_ops_list) > 0 : # Solo añadir leyenda si se ploteó algo
             ax.legend(loc='best', title="Flautas")
@@ -408,8 +443,12 @@ class App(tk.Tk):
                     y_pos_for_holes = min_diam_this_part_this_flute - (5 + flute_idx * 1.5) 
 
                     for h_pos, h_diam in zip(hole_positions_part, hole_diameters_part):
-                        ax_part.plot(h_pos, y_pos_for_holes, color=current_flute_color,
-                                     marker='o', markersize=max(h_diam * 0.4, 1.5), linestyle='None', alpha=0.7)
+                        # Dibujar el agujero como un marcador circular 'o'
+                        marker_size_scaled_part = max(h_diam * 0.8, 3) # Ajustar factor de escala
+                        ax_part.plot(h_pos, y_pos_for_holes, 
+                                     marker='o', color=current_flute_color, 
+                                     markersize=marker_size_scaled_part, 
+                                     linestyle='None', alpha=0.7)
                 
                 ax_part.set_title(f"{part_name.capitalize()}", fontsize=9)
                 ax_part.set_xlabel("Posición en parte (mm)", fontsize=8)

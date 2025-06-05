@@ -365,8 +365,12 @@ class FluteExperimentApp(tk.Tk):
                     
                     for h_pos, h_diam in zip(hole_positions, hole_diameters):
                         abs_hole_pos = current_abs_pos + h_pos
-                        marker_size_hole = max(h_diam * 0.5, 2) 
-                        ax.plot(abs_hole_pos, y_pos_holes_orig, 'o', color='blue', markersize=marker_size_hole, alpha=0.6)
+                        # Usar 'o' como marcador y escalar markersize con el diámetro del agujero
+                        # El factor 0.8 es empírico, ajustar si es necesario para la apariencia deseada
+                        marker_size_scaled = max(h_diam * 0.8, 3) 
+                        ax.plot(abs_hole_pos, y_pos_holes_orig, marker='o', 
+                                color='blue', markersize=marker_size_scaled, 
+                                linestyle='None', alpha=0.6)
                     
                     # Actualizar current_abs_pos para la siguiente parte (solo cuerpo)
                     total_length = part_data.get("Total length", 0.0)
@@ -406,8 +410,11 @@ class FluteExperimentApp(tk.Tk):
 
                     for h_pos_m, h_diam_m in zip(hole_positions_mod, hole_diameters_mod):
                         abs_hole_pos_m = current_abs_pos_mod + h_pos_m
-                        marker_size_hole_m = max(h_diam_m * 0.5, 2)
-                        ax.plot(abs_hole_pos_m, y_pos_holes_mod, 'x', color='orange', markersize=marker_size_hole_m, alpha=0.6)
+                        # Usar 'o' como marcador también para los modificados, el color ya los diferencia
+                        marker_size_scaled_m = max(h_diam_m * 0.8, 3)
+                        ax.plot(abs_hole_pos_m, y_pos_holes_mod, marker='o', 
+                                color='orange', markersize=marker_size_scaled_m, 
+                                linestyle='None', alpha=0.6)
                     
                     total_length_mod = part_data_mod.get("Total length", 0.0)
                     mortise_length_mod = part_data_mod.get("Mortise length", 0.0)

@@ -464,18 +464,26 @@ class FluteOperations:
          pressure_abs = np.abs(pressure_modes.T)
          flow_abs = np.abs(flow_modes.T)
 
-         if antires_freqs and pressure_abs.shape[1] > 0 and flow_abs.shape[1] > 0:
-             idx_f_mode1 = np.argmin(np.abs(frequencies - antires_freqs[0]))
-             if idx_f_mode1 < pressure_abs.shape[1]:
-                 line_pres1, = ax_pressure.plot(x_coords, pressure_abs[:, idx_f_mode1], linestyle=linestyle, color=color,
-                                  label=f"{flute_name} ({antires_freqs[0]:.0f}Hz)", alpha=0.8)
-                 if not any(lh.get_label() == line_pres1.get_label() for lh in legend_handles_pres):
-                     legend_handles_pres.append(line_pres1)
+         # Iterar para los dos primeros armónicos (antirresonancias)
+         for i_mode, f_mode in enumerate(antires_freqs[:2]): # Tomar hasta 2 antirresonancias
+             if pressure_abs.shape[1] > 0 and flow_abs.shape[1] > 0:
+                 idx_f_mode = np.argmin(np.abs(frequencies - f_mode))
+                 if idx_f_mode < pressure_abs.shape[1]: # Comprobar que el índice es válido
+                     # Usar un estilo de línea ligeramente diferente para el segundo armónico si es la misma flauta
+                     mode_linestyle = linestyle if i_mode == 0 else '--' 
+                     mode_alpha = 0.8 if i_mode == 0 else 0.6
 
-                 line_flow1, = ax_flow.plot(x_coords, flow_abs[:, idx_f_mode1], linestyle=linestyle, color=color,
-                                  label=f"{flute_name} ({antires_freqs[0]:.0f}Hz)", alpha=0.8)
-                 if not any(lh.get_label() == line_flow1.get_label() for lh in legend_handles_flow):
-                     legend_handles_flow.append(line_flow1)
+                     line_pres, = ax_pressure.plot(x_coords, pressure_abs[:, idx_f_mode], 
+                                                  linestyle=mode_linestyle, color=color,
+                                                  label=f"{flute_name} (AR{i_mode+1}: {f_mode:.0f}Hz)", alpha=mode_alpha)
+                     if not any(lh.get_label() == line_pres.get_label() for lh in legend_handles_pres):
+                         legend_handles_pres.append(line_pres)
+
+                     line_flow, = ax_flow.plot(x_coords, flow_abs[:, idx_f_mode], 
+                                                  linestyle=mode_linestyle, color=color,
+                                                  label=f"{flute_name} (AR{i_mode+1}: {f_mode:.0f}Hz)", alpha=mode_alpha)
+                     if not any(lh.get_label() == line_flow.get_label() for lh in legend_handles_flow):
+                         legend_handles_flow.append(line_flow)
          else:
              logger.debug(f"No hay frecuencias antiresonantes o datos de modo para {flute_name}, nota {note}.")
 
