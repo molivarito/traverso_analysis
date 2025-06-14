@@ -1,7 +1,7 @@
 import json
 import tempfile # Not currently used, but kept for potential future use
 from pathlib import Path
-from typing import Any, Dict, List, Union, Optional # Added Union, Optional
+from typing import Any, Dict, List, Union, Optional, Tuple # Added Union, Optional, Tuple
 import numpy as np
 from openwind import Player, ImpedanceComputation, InstrumentGeometry # type: ignore
 
@@ -121,6 +121,152 @@ class FluteData:
         except Exception as e_init:
             logger.exception(f"Error al inicializar FluteData para '{self.flute_model}': {e_init}")
             raise ValueError(f"Error al procesar los datos de la flauta '{self.flute_model}': {e_init}")
+
+    def get_openwind_geometry_inputs(self) -> Tuple[List[List[Union[float, str]]], List[List[Any]], List[List[str]]]:
+        # type: ignore
+        """
+        Prepara y devuelve los componentes de la geometría (taladro, agujeros laterales, tabla de digitaciones)
+        en el formato esperado por InstrumentGeometry de OpenWind.
+        No incluye ningún tubo adicional; es la geometría base de la flauta.
+        Las dimensiones están en metros y radios. Los tipos de forma son 'linear'.
+        """
+        logger.info(f"Generando inputs de geometría OpenWind para {self.flute_model}...")
+        if not self.combined_measurements:
+            logger.warning(f"No hay mediciones combinadas para {self.flute_model}, no se pueden generar inputs de geometría.")
+            return [], [], []
+
+        # 1. Geometría del Taladro (Bore)
+        logger.debug(f"Creando geometría del bore para {self.flute_model}...")
+        bore_segments_m_radius: List[List[Union[float, str]]] = []
+        if len(self.combined_measurements) >= 2:
+            for i in range(len(self.combined_measurements) - 1):
+                p1 = self.combined_measurements[i]; p2 = self.combined_measurements[i+1]
+                
+                x_start_m = p1["position"] / 1000.0
+                x_end_m = p2["position"] / 1000.0
+                r_start_m = (p1["diameter"] / 2.0) / 1000.0
+                r_end_m = (p2["diameter"] / 2.0) / 1000.0
+                if x_end_m > x_start_m + 1e-7: # Evitar segmentos de longitud cero
+                    bore_segments_m_radius.append([x_start_m, x_end_m, r_start_m, r_end_m, 'linear'])
+                    logger.debug(f"  Bore segment: X=[{x_start_m:.4f}, {x_end_m:.4f}], R=[{r_start_m:.5f}, {r_end_m:.5f}]")
+        elif self.combined_measurements: # Solo un punto
+            logger.warning(f"Solo una medición combinada para {self.flute_model}. No se puede generar un segmento de taladro OpenWind con un solo punto.")
+        else:
+            logger.warning(f"No hay mediciones combinadas para {self.flute_model}. No se puede generar la geometría del taladro.")
+
+        # 2. Agujeros Laterales (Side Holes)
+        logger.debug(f"Creando agujeros laterales para {self.flute_model}...")
+        side_holes_for_openwind: List[List[Any]] = []
+        side_holes_for_openwind.append(['label', 'position', 'chimney', 'radius', 'radius_out']) # Header
+
+        embouchure_label = "embouchure"
+        headjoint_data = self.data.get(FLUTE_PARTS_ORDER[0], {})
+        emb_hole_positions = headjoint_data.get("Holes position", [])
+        emb_hole_diameters = headjoint_data.get("Holes diameter", [])
+        emb_hole_chimneys_list = headjoint_data.get("Holes chimney", [])
+        emb_hole_diam_out_list = headjoint_data.get("Holes diameter_out", [])
+
+        if emb_hole_positions and emb_hole_diameters:
+            emb_pos_mm = emb_hole_positions[0]
+            emb_diam_mm = emb_hole_diameters[0]
+            emb_chim_mm = emb_hole_chimneys_list[0] if emb_hole_chimneys_list else DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT * 1000
+            emb_diam_o_mm = emb_hole_diam_out_list[0] if emb_hole_diam_out_list and emb_hole_diam_out_list[0] > 1e-9 else emb_diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+            
+            if emb_diam_mm > 1e-9: # Ensure diameter is significant before applying defaults based on it
+                if emb_chim_mm < 1e-9: emb_chim_mm = DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT * 1000
+                if emb_diam_o_mm < 1e-9 or emb_diam_o_mm <= emb_diam_mm: emb_diam_o_mm = emb_diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+
+            side_holes_for_openwind.append([
+                embouchure_label,
+                emb_pos_mm / 1000.0, 
+                emb_chim_mm / 1000.0,
+                (emb_diam_mm / 2.0) / 1000.0,
+                (emb_diam_o_mm / 2.0) / 1000.0
+            ])
+            logger.debug(f"  Embouchure '{embouchure_label}' added: pos={emb_pos_mm/1000.0:.4f}m")
+        else:
+            logger.warning(f"  Datos de embocadura insuficientes para {self.flute_model} (posiciones o diámetros vacíos/ausentes). 'embouchure' no se añadirá geométricamente.")
+
+        tone_hole_counter = 0 
+        for part_name in FLUTE_PARTS_ORDER:
+            if part_name == FLUTE_PARTS_ORDER[0]: 
+                continue 
+
+            part_data = self.data.get(part_name, {})
+            current_part_start_abs_mm = self._calculate_part_absolute_start_position_mm(part_name)
+            
+            holes_pos_rel_list = part_data.get("Holes position", [])
+            holes_diam_rel_list = part_data.get("Holes diameter", [])
+            holes_chimney_rel_list = part_data.get("Holes chimney", [])
+            holes_diam_out_rel_list = part_data.get("Holes diameter_out", [])
+
+            for i, hole_pos_rel_mm in enumerate(holes_pos_rel_list):
+                diam_mm = holes_diam_rel_list[i] if i < len(holes_diam_rel_list) else 7.0 
+                chimney_mm = holes_chimney_rel_list[i] if i < len(holes_chimney_rel_list) else DEFAULT_CHIMNEY_HEIGHT * 1000
+                diam_out_mm = holes_diam_out_rel_list[i] if i < len(holes_diam_out_rel_list) and holes_diam_out_rel_list[i] > 1e-9 else diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+
+                if diam_mm > 1e-9: # Ensure diameter is significant
+                    if chimney_mm < 1e-9: chimney_mm = DEFAULT_CHIMNEY_HEIGHT * 1000
+                    if diam_out_mm < 1e-9 or diam_out_mm <= diam_mm: diam_out_mm = diam_mm * DEFAULT_HOLE_RADIUS_OUT_FACTOR
+                
+                tone_hole_counter += 1
+                hole_label = f"hole{tone_hole_counter}"
+                hole_abs_pos_m = (current_part_start_abs_mm + hole_pos_rel_mm) / 1000.0
+                
+                side_holes_for_openwind.append([
+                    hole_label,
+                    hole_abs_pos_m,
+                    chimney_mm / 1000.0,
+                    (diam_mm / 2.0) / 1000.0,
+                    (diam_out_mm / 2.0) / 1000.0
+                ])
+                logger.debug(f"  Tone hole '{hole_label}' added: part='{part_name}', pos_rel={hole_pos_rel_mm}mm, pos_abs={hole_abs_pos_m:.4f}m")
+        logger.debug(f"  Total de agujeros geométricos definidos (incl. embocadura si se añadió): {len(side_holes_for_openwind) -1}")
+
+        # 3. Tabla de Digitaciones (Fingering Chart)
+        logger.debug(f"Creando tabla de digitaciones para {self.flute_model} desde {self.fing_chart_file_path}...")
+        fing_chart_parsed: List[List[str]] = []
+        try:
+            with open(self.fing_chart_file_path, 'r', encoding='utf-8') as f:
+                lines = [line.strip().split() for line in f if line.strip() and not line.startswith('#')]
+            if lines:
+                fing_chart_parsed = lines
+            else:
+                logger.warning(f"El archivo de digitaciones {self.fing_chart_file_path} está vacío.")
+        except FileNotFoundError:
+            logger.error(f"Archivo de digitaciones no encontrado: {self.fing_chart_file_path}")
+        except Exception as e_chart:
+            logger.error(f"Error al procesar el archivo de digitaciones: {e_chart}")
+
+        if side_holes_for_openwind and len(side_holes_for_openwind) > 1: 
+            geom_hole_labels_set = {str(hole_entry[0]) for hole_entry in side_holes_for_openwind[1:]} 
+
+            if not fing_chart_parsed or not fing_chart_parsed[0] or fing_chart_parsed[0][0].lower() != 'label':
+                logger.warning(f"Tabla de digitaciones para {self.flute_model} está vacía o no tiene encabezado 'label'. Creando una dummy.")
+                fing_chart_parsed = [['label', 'D_dummy']] 
+                num_notes_in_chart = 1
+            else:
+                chart_header_row = fing_chart_parsed[0]
+                num_notes_in_chart = len(chart_header_row) - 1
+
+            chart_file_labels_set = {str(row[0]) for row in fing_chart_parsed[1:]}
+            
+            for geom_label in geom_hole_labels_set:
+                if geom_label not in chart_file_labels_set:
+                    logger.info(f"Etiqueta de agujero '{geom_label}' (de geometría) no encontrada en tabla de digitaciones. Añadiendo como 'abierto'.")
+                    new_row = [geom_label] + ['o'] * num_notes_in_chart
+                    fing_chart_parsed.append(new_row)
+        else:
+            logger.warning(f"No hay agujeros geométricos definidos en side_holes_for_openwind para {self.flute_model}, no se puede aumentar/crear tabla de digitaciones de forma robusta.")
+            if not fing_chart_parsed: 
+                 fing_chart_parsed = [['label', 'D_dummy']]
+
+        logger.debug(f"Inputs de geometría para OpenWind ({self.flute_model}): Bore segments: {len(bore_segments_m_radius)}, Holes: {len(side_holes_for_openwind)-1 if side_holes_for_openwind else 0}, Chart rows: {len(fing_chart_parsed)-1 if fing_chart_parsed else 0}")
+        logger.debug(f"  Bore (primeros 2): {bore_segments_m_radius[:2]}")
+        logger.debug(f"  Holes (primeros 3): {side_holes_for_openwind[:3]}")
+        logger.debug(f"  Chart (primeras 3 filas): {fing_chart_parsed[:3]}")
+
+        return bore_segments_m_radius, side_holes_for_openwind, fing_chart_parsed
 
     def _calculate_part_absolute_start_position_mm(self, part_name: str) -> float:
         """
@@ -474,3 +620,4 @@ class FluteData:
         except Exception as e:
             logger.error(f"Error durante la interpolación del diámetro en posición absoluta {abs_x_mm:.2f}mm para {self.flute_model}: {e}")
             return 0.0
+
