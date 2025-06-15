@@ -8,7 +8,7 @@ from openwind import Player, ImpedanceComputation, InstrumentGeometry # type: ig
 # Assuming notion_utils.py is in the same directory or PYTHONPATH
 from notion_utils import get_json_files_from_notion
 # Assuming constants.py is in the same directory or PYTHONPATH
-from constants import (
+from constants import ( # type: ignore
     FLUTE_PARTS_ORDER, DEFAULT_CHIMNEY_HEIGHT,
     DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT, DEFAULT_HOLE_RADIUS_OUT_FACTOR
 )
@@ -32,6 +32,9 @@ elif DEFAULT_FING_CHART_PATH_OPTION2.exists():
 else:
     DEFAULT_FING_CHART_PATH = str(DEFAULT_FING_CHART_PATH_OPTION3)
 
+class FluteDataInitializationError(ValueError):
+    """Custom exception for errors during FluteData initialization, after initial JSON parsing."""
+    pass
 
 class FluteData:
     def __init__(self,
@@ -53,6 +56,8 @@ class FluteData:
         self.temperature = temperature
         self.fing_chart_file_path = fing_chart_file
         self._skip_acoustic_analysis = skip_acoustic_analysis # Guardar el estado
+        self.validation_errors: List[str] = []
+        self.validation_warnings: List[str] = []
 
         try:
             if isinstance(source, str): # Source is a directory path string
@@ -63,11 +68,22 @@ class FluteData:
                 if notion_token and database_id: # Assuming source (path) is used as filter name for Notion
                     self._read_json_data_from_notion(notion_token, database_id, source)
                 else:
+                    # _read_json_data_from_files ahora puebla self.validation_errors
+                    # y relanza la excepción original si ocurre.
+                    # El bloque try/except general de __init__ capturará esto.
+                    # No es necesario un try/except específico aquí si _read_json_data_from_files
+                    # ya maneja la adición a validation_errors.
                     self._read_json_data_from_files(source)
+
                 # Ensure "Flute Model" is in data after reading from files/Notion
                 if "Flute Model" not in self.data or not self.data.get("Flute Model"):
                     self.data["Flute Model"] = self.flute_model
-                else: # If loaded data has a "Flute Model", ensure self.flute_model matches it.
+                # If loaded data has a "Flute Model" (e.g. from a general_info.json if you add one),
+                # ensure self.flute_model matches it.
+                # For now, self.flute_model is primarily derived from directory or source_name.
+                # If a part JSON (like headjoint.json) itself contained a "Flute Model" key,
+                # that would be unusual and might lead to conflicts.
+                # We assume "Flute Model" is a global property, not per-part.
                     self.flute_model = self.data["Flute Model"]
 
             elif isinstance(source, dict): # Source is a pre-loaded data dictionary
@@ -114,13 +130,44 @@ class FluteData:
                 logger.error(f"Error al leer o procesar el archivo de digitaciones '{fing_chart_file}' para {self.flute_model}: {e_fc}")
                 self.finger_frequencies = {}
 
-            self.combined_measurements = self.combine_measurements()
-            if not self._skip_acoustic_analysis: # Condición para ejecutar el análisis
-                self.compute_acoustic_analysis(self.fing_chart_file_path, self.temperature)
+            # Validar los datos cargados
+            self._validate_loaded_data()
 
+            if self.validation_errors:
+                logger.error(f"Errores de validación encontrados para {self.flute_model}: {self.validation_errors}")
+                # No continuar con combine_measurements ni compute_acoustic_analysis si hay errores fatales
+                self.combined_measurements = []
+                self.acoustic_analysis = {}
+            else:
+                if self.validation_warnings:
+                    logger.warning(f"Advertencias de validación para {self.flute_model}: {self.validation_warnings}")
+                self.combined_measurements = self.combine_measurements()
+                
+                # Re-check validation_errors as combine_measurements might add some (though less likely now)
+                # The main geometry validation will happen in get_openwind_geometry_inputs
+                if not self._skip_acoustic_analysis and not self.validation_errors: 
+                    try:
+                        self.compute_acoustic_analysis(self.fing_chart_file_path, self.temperature)
+                    except Exception as e_acoustic:
+                        err_msg_acoustic = f"Error al calcular análisis acústico: {e_acoustic}. Verifique la consistencia de la geometría."
+                        logger.error(f"Error durante compute_acoustic_analysis para {self.flute_model}: {err_msg_acoustic}", exc_info=True)
+                        self.validation_errors.append({'message': err_msg_acoustic})
+                        self.acoustic_analysis = {} # Asegurar que esté vacío
+                        # Propagar el error para que la GUI lo maneje
+                        raise FluteDataInitializationError(f"Fallo en análisis acústico para {self.flute_model}: {err_msg_acoustic}") from e_acoustic
+
+        except (FileNotFoundError, json.JSONDecodeError) as e_file_json:
+            # Estos errores ya deberían haber poblado self.validation_errors
+            # con la información de 'part' desde _read_json_data_from_files.
+            # No necesitamos hacer nada más aquí, la GUI leerá validation_errors.
+            logger.error(f"Error de archivo/JSON durante la inicialización de FluteData para '{self.flute_model}': {e_file_json}")
+            # No relanzar aquí para permitir que la GUI maneje los validation_errors.
         except Exception as e_init:
             logger.exception(f"Error al inicializar FluteData para '{self.flute_model}': {e_init}")
-            raise ValueError(f"Error al procesar los datos de la flauta '{self.flute_model}': {e_init}")
+            if not self.validation_errors: # Solo añadir si está vacío para no sobrescribir errores más específicos
+                    self.validation_errors.append({'message': f"Error general al inicializar FluteData: {e_init}"})
+            # Considerar si relanzar aquí o dejar que la GUI maneje los validation_errors.
+            # Si no relanzamos, la GUI verá los errores en validation_errors.
 
     def get_openwind_geometry_inputs(self) -> Tuple[List[List[Union[float, str]]], List[List[Any]], List[List[str]]]:
         # type: ignore
@@ -129,7 +176,11 @@ class FluteData:
         en el formato esperado por InstrumentGeometry de OpenWind.
         No incluye ningún tubo adicional; es la geometría base de la flauta.
         Las dimensiones están en metros y radios. Los tipos de forma son 'linear'.
-        """
+        """ # noqa: E501
+        if self.validation_errors:
+            logger.error(f"No se pueden generar inputs de OpenWind para {self.flute_model} debido a errores de validación previos.")
+            return [], [], []
+
         logger.info(f"Generando inputs de geometría OpenWind para {self.flute_model}...")
         if not self.combined_measurements:
             logger.warning(f"No hay mediciones combinadas para {self.flute_model}, no se pueden generar inputs de geometría.")
@@ -143,16 +194,44 @@ class FluteData:
                 p1 = self.combined_measurements[i]; p2 = self.combined_measurements[i+1]
                 
                 x_start_m = p1["position"] / 1000.0
-                x_end_m = p2["position"] / 1000.0
                 r_start_m = (p1["diameter"] / 2.0) / 1000.0
+                x_end_m = p2["position"] / 1000.0
                 r_end_m = (p2["diameter"] / 2.0) / 1000.0
-                if x_end_m > x_start_m + 1e-7: # Evitar segmentos de longitud cero
+
+                # Validación de monotonía y longitud de segmento
+                if x_end_m <= x_start_m + 1e-9: # Usar una tolerancia pequeña para flotantes
+                    error_detail = (
+                        f"Segmento de tubo retrocede o tiene longitud cero/negativa entre puntos combinados:\n"
+                        f"  Punto A: AbsPos={p1['position']:.2f}mm (Origen: {p1.get('source_part_name','N/A')}, PosRel={p1.get('source_relative_position','N/A')}mm)\n"
+                        f"  Punto B: AbsPos={p2['position']:.2f}mm (Origen: {p2.get('source_part_name','N/A')}, PosRel={p2.get('source_relative_position','N/A')}mm)\n"
+                        f"Causa probable: 'Mortise length' incorrectos, mediciones desordenadas o superposición de partes."
+                    )
+                    self.validation_errors.append({'message': error_detail})
+                    logger.error(f"Error de geometría para {self.flute_model}: {error_detail}")
+                    # No añadir este segmento problemático, pero continuar validando el resto si es posible
+                    # o retornar inmediatamente si se considera un error fatal para la geometría.
+                    # Por ahora, vamos a registrar y continuar para ver si hay más.
+                    # Si se quiere detener aquí, se podría `return [], [], []` o lanzar una excepción.
+                    continue # Saltar este segmento inválido
+
+                if bore_segments_m_radius and x_start_m < bore_segments_m_radius[-1][1] - 1e-9: # Comprobar contra el x_end del segmento anterior
+                    prev_x_end = bore_segments_m_radius[-1][1] * 1000
+                    error_overlap = f"Superposición de segmentos de tubo: Inicio del segmento actual ({p1['position']:.2f}mm) es menor que el final del anterior ({prev_x_end:.2f}mm)."
+                    self.validation_errors.append({'message': error_overlap})
+                    logger.error(f"Error de geometría para {self.flute_model}: {error_overlap}")
+                
+                if x_end_m > x_start_m + 1e-9: # Asegurar que el segmento tenga una longitud positiva significativa
                     bore_segments_m_radius.append([x_start_m, x_end_m, r_start_m, r_end_m, 'linear'])
                     logger.debug(f"  Bore segment: X=[{x_start_m:.4f}, {x_end_m:.4f}], R=[{r_start_m:.5f}, {r_end_m:.5f}]")
         elif self.combined_measurements: # Solo un punto
             logger.warning(f"Solo una medición combinada para {self.flute_model}. No se puede generar un segmento de taladro OpenWind con un solo punto.")
         else:
             logger.warning(f"No hay mediciones combinadas para {self.flute_model}. No se puede generar la geometría del taladro.")
+
+        # Si se encontraron errores de geometría del bore, no continuar con la creación de InstrumentGeometry
+        if any("Segmento de tubo retrocede" in err.get('message','') or "Superposición de segmentos" in err.get('message','') for err in self.validation_errors):
+            logger.error(f"Errores críticos en la geometría del bore para {self.flute_model}. Abortando generación de inputs de OpenWind.")
+            return [], [], []
 
         # 2. Agujeros Laterales (Side Holes)
         logger.debug(f"Creando agujeros laterales para {self.flute_model}...")
@@ -273,6 +352,10 @@ class FluteData:
         Calcula la posición absoluta de inicio (en mm) del cuerpo de una parte
         basándose en las longitudes totales y de espiga de las partes anteriores.
         """
+        if self.validation_errors: # No intentar calcular si hay errores de validación
+            logger.error(f"Saltando _calculate_part_absolute_start_position_mm para '{part_name}' debido a errores de validación.")
+            return 0.0
+
         if part_name == FLUTE_PARTS_ORDER[0]: # Headjoint starts at 0
             return 0.0
 
@@ -312,15 +395,21 @@ class FluteData:
                 with json_path.open('r', encoding='utf-8') as file:
                     loaded_data_for_parts[part] = json.load(file)
                 logger.debug(f"Cargado {json_path}")
-            except FileNotFoundError:
-                logger.error(f"No se encontró el archivo JSON para la parte '{part}': {json_path}")
-                raise FileNotFoundError(f"No se encontró el archivo: {json_path} para la flauta {self.flute_model}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Error al decodificar JSON en '{json_path}': {e.msg} (línea {e.lineno}, col {e.colno})")
-                raise json.JSONDecodeError(f"Error al decodificar JSON: {json_path} - {e.msg}", e.doc, e.pos)
-            except Exception as e_gen:
-                logger.error(f"Error inesperado cargando '{json_path}': {e_gen}")
-                raise
+            except FileNotFoundError as e_fnf: # Capturar y añadir a validation_errors
+                err_msg_fnf = f"No se encontró el archivo JSON para la parte '{part}': {json_path}"
+                logger.error(err_msg_fnf)
+                self.validation_errors.append({'part': part, 'message': err_msg_fnf})
+                # No relanzar aquí, permitir que __init__ continúe y la GUI maneje validation_errors
+            except json.JSONDecodeError as e: # Capturar y añadir a validation_errors
+                err_msg_json = f"Error al decodificar JSON en '{json_path}': {e.msg} (línea {e.lineno}, col {e.colno})"
+                logger.error(err_msg_json)
+                self.validation_errors.append({'part': part, 'message': err_msg_json})
+                # No relanzar aquí
+            except Exception as e_gen: # Capturar y añadir a validation_errors
+                err_msg_gen = f"Error inesperado cargando '{json_path}': {e_gen}"
+                logger.error(err_msg_gen, exc_info=True)
+                self.validation_errors.append({'part': part, 'message': err_msg_gen})
+                # No relanzar aquí
         self.data.update(loaded_data_for_parts) # Update self.data with loaded parts
 
     def _read_json_data_from_notion(self, notion_token: str, database_id: str, flute_name_filter: str) -> None:
@@ -347,6 +436,10 @@ class FluteData:
 
 
     def combine_measurements(self) -> List[Dict[str, float]]:
+        if self.validation_errors: # No combinar si hay errores
+            logger.error(f"Saltando combine_measurements para {self.flute_model} debido a errores de validación.")
+            return []
+
         logger.debug(f"Combinando mediciones para {self.flute_model}")
         combined_measurements = []
         
@@ -383,11 +476,21 @@ class FluteData:
                     continue
                 elif part_name == FLUTE_PARTS_ORDER[0] and filter_threshold <= 0: # Mortise too large or total_length zero
                     logger.debug(f"Headjoint {self.flute_model}: mortise {part_mortise_length} >= total_length {part_total_length}. Todas las mediciones se incluirán.")
-                    # No filtrar si el umbral no es válido
+                
+                # Para las demás partes, no filtrar puntos que estén dentro de la espiga (mortise) de la parte actual
+                # ya que esos puntos no forman parte del cuerpo acústico de *esta* parte.
+                # La espiga de la parte actual se inserta en la parte anterior.
+                if part_name != FLUTE_PARTS_ORDER[0] and pos < part_mortise_length - 1e-6 : # Tolerancia para flotantes
+                    continue
 
                 if part_name in [FLUTE_PARTS_ORDER[2], FLUTE_PARTS_ORDER[3]] and pos <= part_mortise_length:
                     continue
-                combined_measurements.append({"position": adjusted_pos, "diameter": diam})
+                combined_measurements.append({
+                    "position": adjusted_pos, 
+                    "diameter": diam,
+                    "source_part_name": part_name,
+                    "source_relative_position": pos
+                })
 
         logger.debug(f"Mediciones combinadas generadas para {self.flute_model} con {len(combined_measurements)} puntos.")
         if not combined_measurements and any(part_data_map.values()): # Si hay datos de partes pero no mediciones combinadas
@@ -395,6 +498,10 @@ class FluteData:
         return combined_measurements
 
     def compute_acoustic_analysis(self, fing_chart_file: str, temperature: float) -> None:
+        if self.validation_errors: # No analizar si hay errores
+            logger.error(f"Saltando compute_acoustic_analysis para {self.flute_model} debido a errores de validación.")
+            return
+
         logger.debug(f"Calculando análisis acústico para {self.flute_model} a {temperature}°C.")
         self.acoustic_analysis = {} # Reset before filling
 
@@ -402,6 +509,12 @@ class FluteData:
             if not self.combined_measurements:
                 logger.warning(f"No hay mediciones combinadas para {self.flute_model}, saltando análisis acústico.")
                 return
+
+            # Obtener y validar la geometría ANTES de intentar el bucle de notas
+            bore_segments_m_radius, side_holes_for_openwind, fing_chart_parsed = self.get_openwind_geometry_inputs()
+            if self.validation_errors: # Errores detectados en get_openwind_geometry_inputs
+                logger.error(f"Errores de validación de geometría impiden el análisis acústico para {self.flute_model}.")
+                raise ValueError(f"Errores de validación de geometría: {self.validation_errors[0]['message']}")
 
             geom = [[m["position"] / 1000.0, m["diameter"] / 2000.0] for m in self.combined_measurements]
 
@@ -578,7 +691,7 @@ class FluteData:
             logger.debug(f"Notas del archivo de digitación para {self.flute_model}: {notes_from_chart}")
 
             for note in notes_from_chart:
-                if not note: continue
+                if not note or not note.strip(): continue # Saltar notas vacías o solo espacios
                 logger.debug(f"Calculando impedancia para nota: {note} en {self.flute_model}")
                 try:
                     self.acoustic_analysis[note] = ImpedanceComputation(
@@ -592,11 +705,15 @@ class FluteData:
                     logger.info(f"Análisis acústico completado para nota {note} en {self.flute_model}")
                 except Exception as e_imp:
                     logger.error(f"Error en ImpedanceComputation para nota '{note}' en {self.flute_model}. Datos de entrada: "
-                                 f"Geom (primeros 5): {geom[:5]}, SideHoles (primeros 5): {side_holes_for_openwind[:5]}. Error: {e_imp}")
+                                 f"Geom (primeros 5): {geom[:5]}, SideHoles (primeros 5): {side_holes_for_openwind[:5]}. Error: {e_imp}", exc_info=True)
+                    # Si un cálculo de impedancia falla, propagar inmediatamente para que __init__ lo maneje.
+                    raise ValueError(f"Fallo en ImpedanceComputation para nota '{note}': {e_imp}") from e_imp
 
         except Exception as e_main:
             logger.exception(f"Error mayor en compute_acoustic_analysis para {self.flute_model}: {e_main}")
             self.acoustic_analysis = {} # Ensure it's empty on major failure
+            # Propagar este error también para que __init__ lo maneje
+            raise ValueError(f"Error en la configuración del análisis acústico: {e_main}") from e_main
 
     def _get_bore_diameter_at_absolute_pos(self, abs_x_mm: float) -> float:
         """
@@ -621,3 +738,135 @@ class FluteData:
             logger.error(f"Error durante la interpolación del diámetro en posición absoluta {abs_x_mm:.2f}mm para {self.flute_model}: {e}")
             return 0.0
 
+    def _validate_loaded_data(self):
+        """
+        Valida los datos cargados en self.data y puebla
+        self.validation_errors y self.validation_warnings.
+        """
+        self.validation_errors.clear()
+        self.validation_warnings.clear()
+
+        if not self.data:
+            self.validation_errors.append({'message': "No se cargaron datos para ninguna parte de la flauta."})
+            return
+
+        for part_name in FLUTE_PARTS_ORDER:
+            part_data = self.data.get(part_name)
+
+            if not isinstance(part_data, dict):
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': Los datos faltan o no son un diccionario."})
+                continue 
+
+            total_length = part_data.get("Total length")
+            if not isinstance(total_length, (int, float)):
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': 'Total length' falta o es inválido ({total_length})."})
+                total_length = 0 
+            elif total_length <= 0:
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': 'Total length' ({total_length}) debe ser positivo."})
+
+            mortise_length = part_data.get("Mortise length")
+            if not isinstance(mortise_length, (int, float)):
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': 'Mortise length' falta o es inválido ({mortise_length})."})
+            elif mortise_length < 0:
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': 'Mortise length' ({mortise_length}) no puede ser negativo."})
+            elif total_length > 0 and isinstance(mortise_length, (int, float)) and mortise_length > total_length:
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': 'Mortise length' ({mortise_length}) no puede ser mayor que 'Total length' ({total_length})."})
+
+            measurements = part_data.get("measurements")
+            if not isinstance(measurements, list):
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': 'measurements' falta o no es una lista."})
+            else:
+                try:
+                    original_positions = [m.get("position") for m in measurements if isinstance(m, dict)]
+                    current_measurements = [dict(m) for m in measurements if isinstance(m, dict)] # Copia para ordenar
+                    current_measurements.sort(key=lambda m: m.get("position", float('inf')))
+
+                    if len(original_positions) == len(current_measurements) and \
+                       any(orig_pos != sorted_m.get("position") for orig_pos, sorted_m in zip(original_positions, current_measurements) if orig_pos is not None):
+                        self.validation_warnings.append({'part': part_name, 'message': f"Parte '{part_name}': 'measurements' no estaban ordenados por posición. Se han ordenado automáticamente."})
+                        part_data["measurements"] = current_measurements
+                        measurements = current_measurements
+                except Exception as e_sort:
+                    self.validation_warnings.append({'part': part_name, 'message': f"Parte '{part_name}': No se pudieron ordenar 'measurements': {e_sort}"})
+
+                for i, m_item in enumerate(measurements):
+                    if not isinstance(m_item, dict):
+                        self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}', medición {i+1}: El item no es un diccionario."})
+                        continue
+                    m_pos = m_item.get("position")
+                    m_diam = m_item.get("diameter")
+
+                    if not isinstance(m_pos, (int, float)):
+                        self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}', medición {i+1}: 'position' falta o es inválida ({m_pos})."})
+                    elif m_pos < 0:
+                        self.validation_warnings.append({'part': part_name, 'message': f"Parte '{part_name}', medición {i+1}: 'position' ({m_pos}) es negativa. Se usará abs({m_pos})."})
+                        m_item["position"] = abs(m_pos)
+                    elif total_length > 0 and m_pos > total_length + 1e-6:
+                        self.validation_warnings.append({'part': part_name, 'message': f"Parte '{part_name}', medición {i+1}: 'position' ({m_pos}) excede 'Total length' ({total_length})."})
+
+                    if not isinstance(m_diam, (int, float)):
+                        self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}', medición {i+1}: 'diameter' falta o es inválido ({m_diam})."})
+                    elif m_diam <= 0:
+                        self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}', medición {i+1}: 'diameter' ({m_diam}) debe ser positivo."})
+
+            holes_pos = part_data.get("Holes position")
+            holes_diam = part_data.get("Holes diameter")
+            holes_chimney = part_data.get("Holes chimney")
+            holes_diam_out = part_data.get("Holes diameter_out")
+
+            if not isinstance(holes_pos, list) or not isinstance(holes_diam, list):
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': 'Holes position' o 'Holes diameter' falta o no es una lista."})
+            elif len(holes_pos) != len(holes_diam):
+                self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}': Discrepancia en longitud de 'Holes position' ({len(holes_pos)}) y 'Holes diameter' ({len(holes_diam)})."})
+            else:
+                num_holes = len(holes_pos)
+                # Validar y completar listas opcionales (chimney, diameter_out)
+                for prop_name, default_val_factor, is_emb_specific in [
+                    ("Holes chimney", DEFAULT_CHIMNEY_HEIGHT * 1000, True),
+                    ("Holes diameter_out", DEFAULT_HOLE_RADIUS_OUT_FACTOR, False)
+                ]:
+                    prop_list = part_data.get(prop_name)
+                    if prop_list is not None:
+                        if not isinstance(prop_list, list):
+                            self.validation_warnings.append({'part': part_name, 'message': f"Parte '{part_name}': '{prop_name}' no es una lista. Se usarán/generarán defaults."})
+                            prop_list = [None] * num_holes # Para forzar la generación de defaults
+                        
+                        corrected_list = list(prop_list) # Copia para modificar
+                        while len(corrected_list) < num_holes: corrected_list.append(None) # Rellenar si es más corta
+                        corrected_list = corrected_list[:num_holes] # Truncar si es más larga
+
+                        for i_h in range(num_holes):
+                            if corrected_list[i_h] is None or (isinstance(corrected_list[i_h], (int,float)) and corrected_list[i_h] < 0):
+                                self.validation_warnings.append({'part': part_name, 'message': f"Parte '{part_name}', agujero {i_h+1}: '{prop_name}' inválido o ausente. Se generará default."})
+                                if prop_name == "Holes chimney":
+                                    default_h_val = (DEFAULT_EMBOUCHURE_CHIMNEY_HEIGHT if is_emb_specific and part_name == FLUTE_PARTS_ORDER[0] and i_h == 0 else DEFAULT_CHIMNEY_HEIGHT) * 1000
+                                    corrected_list[i_h] = default_h_val
+                                elif prop_name == "Holes diameter_out" and isinstance(holes_diam[i_h], (int,float)) and holes_diam[i_h] > 0:
+                                    corrected_list[i_h] = holes_diam[i_h] * default_val_factor
+                                else: # Fallback si el diámetro base es inválido
+                                    corrected_list[i_h] = 0.1 # Un valor pequeño pero positivo
+                        part_data[prop_name] = corrected_list
+
+                # Validaciones individuales de agujeros (posición, diámetro)
+                for i, h_pos_val in enumerate(holes_pos):
+                    if not isinstance(h_pos_val, (int, float)) or h_pos_val < 0 or (total_length > 0 and h_pos_val > total_length + 1e-6):
+                        self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}', agujero {i+1}: 'position' ({h_pos_val:.2f}) inválida, negativa o excede 'Total length' ({total_length:.2f})."})
+                    
+                    current_hole_diam_spec = holes_diam[i] if i < len(holes_diam) else None
+                    effective_hole_diam = None
+
+                    if isinstance(current_hole_diam_spec, (list, tuple)) and len(current_hole_diam_spec) == 2 and all(isinstance(axis, (int, float)) for axis in current_hole_diam_spec):
+                        major_axis, minor_axis = float(current_hole_diam_spec[0]), float(current_hole_diam_spec[1])
+                        if major_axis > 0 and minor_axis > 0:
+                            ellipse_area = np.pi * (major_axis / 2.0) * (minor_axis / 2.0)
+                            effective_hole_diam = 2.0 * np.sqrt(ellipse_area / np.pi)
+                            self.validation_warnings.append({'part': part_name, 'message': f"Parte '{part_name}', agujero {i+1}: Diámetro elíptico ({major_axis:.2f}x{minor_axis:.2f}mm) interpretado. Usando diámetro circular equivalente: {effective_hole_diam:.2f}mm."})
+                            # Actualizar la lista de diámetros en part_data para uso posterior
+                            part_data["Holes diameter"][i] = effective_hole_diam 
+                        else:
+                            self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}', agujero {i+1}: Ejes de elipse ({major_axis}x{minor_axis}) deben ser positivos."})
+                    elif isinstance(current_hole_diam_spec, (int, float)):
+                        effective_hole_diam = float(current_hole_diam_spec)
+
+                    if effective_hole_diam is None or effective_hole_diam <= 0:
+                        self.validation_errors.append({'part': part_name, 'message': f"Parte '{part_name}', agujero {i+1}: 'diameter' ({current_hole_diam_spec}) inválido, no numérico, o no positivo después de conversión."})

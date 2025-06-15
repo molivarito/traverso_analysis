@@ -11,8 +11,7 @@ import os
 import copy
 from pathlib import Path # <--- AÑADIR ESTA LÍNEA
 from typing import Dict, Any, Optional, List, Tuple # <--- AÑADIR ESTA LÍNEA
-
-from flute_data import FluteData, DEFAULT_FING_CHART_PATH # <--- MODIFICAR ESTA LÍNEA
+from flute_data import FluteData, FluteDataInitializationError # <--- MODIFICAR ESTA LÍNEA
 from flute_operations import FluteOperations
 # Asumiendo que GraphicalFluteEditor existe y funciona como se espera
 # Necesitarás asegurarte de que este import funcione en tu estructura de proyecto.
@@ -29,6 +28,59 @@ SCRIPT_DIR_EXPERIMENTER = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR_EXPERIMENTER = SCRIPT_DIR_EXPERIMENTER.parent / "data_json"
 if not DEFAULT_DATA_DIR_EXPERIMENTER.exists():
     DEFAULT_DATA_DIR_EXPERIMENTER = SCRIPT_DIR_EXPERIMENTER / "data_json" # Fallback if structure is different
+
+# Definición de TraditionalTextEditor (adaptada de gui.py para ser autocontenida aquí)
+class TraditionalTextEditor(tk.Toplevel):
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.title("Editor JSON") # Título más genérico
+        self.geometry("800x600")
+        self.filename = None # Ruta al archivo que se está editando
+        self.create_widgets()
+
+    def create_widgets(self):
+        toolbar = ttk.Frame(self)
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+        # No necesitamos 'Abrir' o 'Guardar Como' si el editor se usa solo para corregir un archivo específico.
+        btn_save = ttk.Button(toolbar, text="Guardar y Cerrar", command=self.save_and_close)
+        btn_save.pack(side=tk.LEFT, padx=5, pady=2)
+        btn_cancel = ttk.Button(toolbar, text="Cancelar", command=self.cancel_edit)
+        btn_cancel.pack(side=tk.LEFT, padx=5, pady=2)
+
+        self.text_area = tk.Text(self, wrap=tk.WORD, undo=True)
+        self.text_area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        vsb = ttk.Scrollbar(self, orient="vertical", command=self.text_area.yview)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.text_area.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text_area.xview)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.text_area.configure(xscrollcommand=hsb.set)
+
+    def load_file_content(self, filepath: str):
+        self.filename = filepath
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.text_area.delete("1.0", tk.END)
+            self.text_area.insert(tk.END, content)
+            self.title(f"Editando - {os.path.basename(filepath)}")
+        except Exception as e:
+            messagebox.showerror("Error Abriendo Archivo", f"No se pudo cargar el archivo para editar:\n{e}", parent=self)
+            self.destroy() # Cerrar si no se puede cargar
+
+    def save_and_close(self):
+        if self.filename:
+            try:
+                with open(self.filename, "w", encoding="utf-8") as f:
+                    f.write(self.text_area.get("1.0", tk.END).strip() + "\n") # Asegurar una nueva línea al final
+                logger.info(f"Archivo guardado: {self.filename}")
+            except Exception as e:
+                messagebox.showerror("Error Guardando", f"No se pudo guardar el archivo:\n{e}", parent=self)
+                return # No cerrar si falla el guardado
+        self.destroy()
+
+    def cancel_edit(self):
+        self.destroy()
 
 class FluteExperimentApp(tk.Tk):
     def __init__(self):
@@ -151,34 +203,85 @@ class FluteExperimentApp(tk.Tk):
             logger.info("Flute loading cancelled or invalid path.")
             return
         self._process_loaded_flute_data(dir_path)
+        
+    def _process_loaded_flute_data(self, dir_path_str: str):
+        dir_path = Path(dir_path_str)
+        base_name = dir_path.name
+        flute_data_obj_for_experimenter: Optional[FluteData] = None
 
-    def _process_loaded_flute_data(self, dir_path: str):
+        while True: # Bucle para reintentar después de editar
+            try:
+                logger.info(f"Experimenter: Intentando cargar FluteData desde: {dir_path}")
+                # FluteData se encarga de leer los JSONs y la validación inicial.
+                # Pasamos skip_acoustic_analysis=True porque solo necesitamos la geometría
+                # para la carga inicial y edición. El análisis se hará explícitamente.
+                current_flute_data_attempt = FluteData(str(dir_path), 
+                                                       source_name=base_name,
+                                                       skip_acoustic_analysis=True)
+
+                if not current_flute_data_attempt.validation_errors:
+                    if current_flute_data_attempt.validation_warnings:
+                        warning_messages = "\n".join([w.get('message', 'Advertencia desconocida.') for w in current_flute_data_attempt.validation_warnings])
+                        messagebox.showwarning("Advertencias de Validación", f"Advertencias para '{base_name}':\n{warning_messages}", parent=self)
+                    flute_data_obj_for_experimenter = current_flute_data_attempt
+                    break # Carga exitosa, salir del bucle while
+
+                # Hay errores de validación
+                error_info = current_flute_data_attempt.validation_errors[0]
+                error_message = error_info.get('message', 'Error desconocido.')
+                part_with_error = error_info.get('part')
+                file_to_edit_path_obj: Optional[Path] = None
+                if part_with_error:
+                    file_to_edit_path_obj = dir_path / f"{part_with_error}.json"
+
+                prompt_message = f"Error en datos JSON para '{base_name}':\n- {error_message}\n\n"
+                
+                if file_to_edit_path_obj and file_to_edit_path_obj.exists():
+                    prompt_message += f"¿Desea editar el archivo '{file_to_edit_path_obj.name}' para corregirlo?"
+                    user_choice = messagebox.askyesnocancel("Error de Datos JSON", prompt_message, parent=self, icon=messagebox.ERROR)
+                    if user_choice is True: # Sí, editar
+                        editor = TraditionalTextEditor(self)
+                        editor.load_file_content(str(file_to_edit_path_obj))
+                        self.wait_window(editor) # Esperar a que el editor se cierre
+                        continue # Reintentar carga en el bucle while
+                    elif user_choice is False: # No, no editar
+                        flute_data_obj_for_experimenter = None; break 
+                    else: # Cancelar
+                        messagebox.showinfo("Carga Cancelada", "Se canceló la carga de la flauta.", parent=self)
+                        self._reset_state_after_load_fail(); return
+                else: # Error general o archivo no identificable
+                    messagebox.showerror("Error de Datos JSON", prompt_message, parent=self)
+                    flute_data_obj_for_experimenter = None; break
+            
+            except FluteDataInitializationError as e_fdi: # Errores más allá de la validación JSON básica
+                messagebox.showerror("Error de Carga (Procesamiento)", f"Error al procesar datos para '{base_name}':\n{e_fdi}", parent=self)
+                flute_data_obj_for_experimenter = None; break
+            except Exception as e_load_fd: # Otros errores inesperados durante la instanciación de FluteData
+                logger.exception(f"Error inesperado al cargar FluteData para {base_name}")
+                messagebox.showerror("Error de Carga (Inesperado)", f"Error inesperado al cargar '{base_name}':\n{e_load_fd}", parent=self)
+                flute_data_obj_for_experimenter = None; break
+        
+        if not flute_data_obj_for_experimenter:
+            self._reset_state_after_load_fail()
+            return
+
+        # Si la carga fue exitosa (con o sin correcciones)
         try:
-            base_name = os.path.basename(dir_path)
-            temp_data_dict: Dict[str, Any] = {"Flute Model": base_name}
-
-            # Importar FLUTE_PARTS_ORDER de constants.py
-            from constants import FLUTE_PARTS_ORDER
-            for part in FLUTE_PARTS_ORDER:
-                json_path = os.path.join(dir_path, f"{part}.json")
-                if not os.path.exists(json_path):
-                    raise FileNotFoundError(f"Missing file: {json_path}")
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    temp_data_dict[part] = json.load(f)
-
-            self.data_path = dir_path
+            self.data_path = str(dir_path)
             self.flute_name = base_name
-            self.original_flute_data_dict = temp_data_dict
+            # Usar los datos directamente del objeto FluteData cargado
+            self.original_flute_data_dict = copy.deepcopy(flute_data_obj_for_experimenter.data)
             self.modified_flute_data_dict = copy.deepcopy(self.original_flute_data_dict)
             self.has_modifications = False
             self.data_modified_since_analysis = True
 
             logger.info(f"Creating FluteData for original: {self.flute_name}")
-            # Usar la inicialización de FluteData que acepta un dict y source_name
-            self.original_flute_ops = FluteOperations(
-                FluteData(source=copy.deepcopy(self.original_flute_data_dict), 
-                          source_name=self.flute_name)
-            )
+            # Re-instanciar FluteData para el original_flute_ops, esta vez permitiendo el análisis acústico
+            original_fd_for_ops = FluteData(source=copy.deepcopy(self.original_flute_data_dict), source_name=self.flute_name, skip_acoustic_analysis=False)
+            if original_fd_for_ops.validation_errors: # Comprobar de nuevo por si acaso
+                messagebox.showerror("Error Post-Carga", f"Errores de validación al re-procesar {self.flute_name} para análisis:\n{original_fd_for_ops.validation_errors[0]['message']}", parent=self)
+                self._reset_state_after_load_fail(); return
+            self.original_flute_ops = FluteOperations(original_fd_for_ops)
             logger.info("Original analysis complete.")
 
             self.modified_flute_ops = None
@@ -192,11 +295,10 @@ class FluteExperimentApp(tk.Tk):
 
             self._update_all_plots()
 
-        except FileNotFoundError as e:
-            messagebox.showerror("Load Error", f"Could not load flute:\n{e}"); self._reset_state_after_load_fail()
         except Exception as e:
-            logger.exception("Error during flute loading process")
-            messagebox.showerror("Load Error", f"Error during loading:\n{type(e).__name__}: {e}"); self._reset_state_after_load_fail()
+            logger.exception("Error processing loaded flute data after successful FluteData instantiation")
+            messagebox.showerror("Processing Error", f"Error after loading flute data:\n{type(e).__name__}: {e}", parent=self)
+            self._reset_state_after_load_fail()
 
     def _reset_state_after_load_fail(self):
         self.original_flute_data_dict = None; self.modified_flute_data_dict = None
@@ -662,7 +764,8 @@ if __name__ == "__main__":
                 "Holes position": [], "Holes diameter": [], "Holes chimney": [], "Holes diameter_out": []
             }
         }
-        fing_chart_path_for_test = DEFAULT_FING_CHART_PATH
+        from flute_data import DEFAULT_FING_CHART_PATH # Importar la constante
+        fing_chart_path_for_test = DEFAULT_FING_CHART_PATH 
         if not Path(fing_chart_path_for_test).exists():
             logger.warning(f"Default fingering chart '{fing_chart_path_for_test}' not found. Acoustic analysis might fail for FluteData test.")
             # Podrías crear un archivo de digitación dummy temporal aquí si es crítico para la prueba __init__

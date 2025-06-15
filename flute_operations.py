@@ -141,20 +141,22 @@ class FluteOperations:
         return ax
 
     def plot_combined_flute_data(self, ax: Optional[plt.Axes] = None,
-                                 plot_label: Optional[str] = None, # Renombrado de flute_names
+                                 plot_label: Optional[str] = None, 
                                  flute_color: Optional[str] = None, flute_style: Optional[str] = None) -> plt.Axes:
         fig: plt.Figure
         if ax is None:
             fig, ax = plt.subplots(figsize=(18, 6))
         else:
             fig = ax.figure
-            # ax.clear() # Eliminado: El llamador es responsable de limpiar los ejes si es necesario antes de superponer.
+            # No limpiar el eje aquí para permitir superposición si el llamador lo desea.
+            # ax.clear() 
 
         combined_measurements = self.flute_data.combined_measurements
         if not combined_measurements:
             logger.warning(f"No hay mediciones combinadas para {self.flute_data.flute_model} en plot_combined_flute_data.")
-            ax.text(0.5, 0.5, "No hay datos de mediciones combinadas", ha='center', va='center', transform=ax.transAxes)
-            ax.set_title("Perfil de Flauta Combinado" + (f" - {self.flute_data.flute_model}" if self.flute_data.flute_model else ""))
+            # No dibujar texto de error si se está superponiendo. El llamador puede manejarlo.
+            # ax.text(0.5, 0.5, "No hay datos de mediciones combinadas", ha='center', va='center', transform=ax.transAxes)
+            # ax.set_title("Perfil de Flauta Combinado" + (f" - {self.flute_data.flute_model}" if self.flute_data.flute_model else ""))
             return ax
 
         positions = [item["position"] for item in combined_measurements]
@@ -165,29 +167,27 @@ class FluteOperations:
         ax.plot(positions, diameters, label=label_to_use,
                 linestyle=flute_style if flute_style else LINESTYLES[0],
                 color=flute_color if flute_color else BASE_COLORS[0])
-
-        # TODO: Ploteo de agujeros en posiciones absolutas si es necesario y los datos están disponibles.
-        # Ver plot_top_view_instrument_geometry para una implementación de esto.
-
-        ax.set_xlabel("Posición (mm)")
-        ax.set_ylabel("Diámetro (mm)")
-        ax.grid(True, linestyle=':', alpha=0.7)
-        if label_to_use: ax.legend(loc='best', fontsize=9)
-        title_str = "Perfil de Flauta Combinado"
-        if self.flute_data.flute_model and self.flute_data.flute_model != label_to_use:
-            title_str += f" ({self.flute_data.flute_model})"
-        ax.set_title(title_str)
+        
+        # El título y la leyenda se manejan mejor por el llamador si se superponen múltiples flautas.
+        # ax.set_xlabel("Posición (mm)")
+        # ax.set_ylabel("Diámetro (mm)")
+        # ax.grid(True, linestyle=':', alpha=0.7)
+        # if label_to_use: ax.legend(loc='best', fontsize=9)
+        # title_str = "Perfil de Flauta Combinado"
+        # if self.flute_data.flute_model and self.flute_data.flute_model != label_to_use:
+        #     title_str += f" ({self.flute_data.flute_model})"
+        # ax.set_title(title_str)
         return ax
 
     def plot_flute_2d_view(self, ax: Optional[plt.Axes] = None,
-                           plot_label: Optional[str] = None, # Renombrado
+                           plot_label: Optional[str] = None, 
                            flute_color: Optional[str] = None, flute_style: Optional[str] = None) -> plt.Axes:
         fig: plt.Figure
         if ax is None:
             fig, ax = plt.subplots(figsize=(15, 4))
         else:
             fig = ax.figure
-            ax.clear()
+            ax.clear() # Limpiar si se reutiliza para una sola flauta
 
         combined_measurements = self.flute_data.combined_measurements
         if not combined_measurements:
@@ -209,9 +209,6 @@ class FluteOperations:
                 color=flute_color if flute_color else BASE_COLORS[0],
                 linestyle=flute_style if flute_style else LINESTYLES[0],
                 linewidth=2)
-
-        # TODO: Ploteo de agujeros en posiciones absolutas.
-        # Ver plot_top_view_instrument_geometry para una implementación de esto.
 
         ax.set_xlabel("Posición (mm)")
         ax.set_ylabel("Radio (mm)")
@@ -263,22 +260,16 @@ class FluteOperations:
         
     @staticmethod
     def _plot_shape_static(shape_data: Tuple[np.ndarray, np.ndarray], ax: plt.Axes, mmeter_conversion: float, **kwargs: Any) -> None:
-        """ Dibuja una forma de tubo (x, r). Espera datos en metros, convierte a mm si mmeter_conversion = M_TO_MM_FACTOR. """
         x_m, r_m = shape_data
-
-        # Convertir a la unidad deseada para el gráfico (ej. mm)
         x_plot = x_m * mmeter_conversion
         r_plot = r_m * mmeter_conversion
-
-        # Añadir NaN para separar las dos mitades del perfil
         radius_to_plot = np.concatenate([r_plot, [np.nan], np.flip(-r_plot)])
         position_to_plot = np.concatenate([x_plot, [np.nan], np.flip(x_plot)])
-
         ax.plot(position_to_plot, radius_to_plot, **kwargs)
 
     @staticmethod
     def _plot_holes_static(
-        holes_info: List[Dict[str, Any]], # Lista de diccionarios, cada uno con 'label', 'position_m', 'radius_m', 'is_open'
+        holes_info: List[Dict[str, Any]], 
         ax: plt.Axes,
         mmeter_conversion: float,
         default_color: str = 'black',
@@ -289,22 +280,16 @@ class FluteOperations:
                 pos_m = hole_detail['position_m']
                 rad_m = hole_detail['radius_m']
                 is_open = hole_detail.get('is_open', True)
-                # label = hole_detail.get('label', '') # No usado para el ploteo actual
-
-                # Convertir a unidades de ploteo
                 x_center_plot = pos_m * mmeter_conversion
                 rad_plot = rad_m * mmeter_conversion
-
                 x_circle_plot = x_center_plot + rad_plot * np.cos(theta)
-                y_circle_plot = rad_plot * np.sin(theta) # Asume que el tubo está centrado en y=0
-
+                y_circle_plot = rad_plot * np.sin(theta) 
                 plot_kwargs = kwargs.copy()
-                current_color = plot_kwargs.pop('color', default_color) # Sacar color si está, usar default_color si no
-
+                current_color = plot_kwargs.pop('color', default_color) 
                 if is_open:
                     ax.plot(x_circle_plot, y_circle_plot, color=current_color, solid_capstyle='round', **plot_kwargs)
                 else:
-                    ax.fill(x_circle_plot, y_circle_plot, color=current_color, **plot_kwargs)
+                    ax.fill(x_circle_plot, y_circle_plot, color=current_color, **plot_kwargs) # Removed solid_capstyle for fill
         except Exception as e:
             logger.error(f"Error graficando agujeros (estático): {e}")
 
@@ -343,10 +328,8 @@ class FluteOperations:
                             positions_mm = np.array([item["position"] for item in combined_measurements])
                             diameters_mm = np.array([item["diameter"] for item in combined_measurements])
                             radii_mm = diameters_mm / 2.0
-
                             ax.plot(positions_mm, radii_mm, color='black', linestyle='-', linewidth=1)
                             ax.plot(positions_mm, -radii_mm, color='black', linestyle='-', linewidth=1)
-                            logger.debug(f"Dibujado Main Bore usando combined_measurements para {self.flute_data.flute_model} en vista superior.")
                         except Exception as e_plot_bore:
                             logger.error(f"Error al dibujar el tubo principal usando combined_measurements para {self.flute_data.flute_model}: {e_plot_bore}")
                             ax.text(0.5, 0.5, "Error al dibujar tubo", ha='center', va='center', transform=ax.transAxes, color='red')
@@ -355,12 +338,11 @@ class FluteOperations:
                         ax.text(0.5, 0.5, "Error: Geometría del tubo no disponible", ha='center', va='center', transform=ax.transAxes)
 
                     try:
-                        # Plot Holes (positions are in meters from instrument_geometry.holes)
                         holes_details_for_plot = []
                         fingering = instrument_geometry.fingering_chart.fingering_of(note)
                         for hole_obj in instrument_geometry.holes:
                             pos_m = hole_obj.position.get_value()
-                            rad_m = hole_obj.shape.get_radius_at(0) if hasattr(hole_obj.shape, 'get_radius_at') else 0.003 # Default radius if not found
+                            rad_m = hole_obj.shape.get_radius_at(0) if hasattr(hole_obj.shape, 'get_radius_at') else 0.003 
                             is_open = fingering.is_side_comp_open(hole_obj.label)
                             holes_details_for_plot.append({
                                 'label': hole_obj.label, 'position_m': pos_m, 'radius_m': rad_m, 'is_open': is_open
@@ -368,7 +350,6 @@ class FluteOperations:
                         FluteOperations._plot_holes_static(holes_details_for_plot, ax, M_TO_MM_FACTOR, default_color='dimgray', linewidth=0.5)
                     except Exception as e_holes:
                         logger.error(f"Error al dibujar los agujeros para {self.flute_data.flute_model}, nota {note}: {e_holes}")
-                        # No necesariamente mostrar un error en el gráfico por esto, ya que el tubo principal podría estar dibujado.
 
             ax.set_xlabel("Posición (mm)")
             ax.set_ylabel("Radio (mm)")
@@ -381,11 +362,10 @@ class FluteOperations:
             ax.set_title(f"Vista Superior ({note}) - Error", fontsize=10)
             return ax
 
-    # --- Métodos Estáticos para Gráficos de Resumen (Comparativos) ---
     @staticmethod
     def plot_individual_admittance_analysis(
          acoustic_analysis_list: List[Tuple[Dict[str, ImpedanceComputation], str]],
-         combined_measurements_list: List[Tuple[List[Dict[str, float]], str]], # Lista de (combined_measurements, flute_name)
+         combined_measurements_list: List[Tuple[List[Dict[str, float]], str]], 
          note: str,
          fig_to_use: Optional[plt.Figure] = None,
          base_colors: List[str] = BASE_COLORS,
@@ -413,7 +393,6 @@ class FluteOperations:
 
      ax_admittance, ax_pressure, ax_geometry, ax_flow = axes.flatten()
      
-     # Limpiar ejes explícitamente si se reutiliza la figura
      if fig_to_use is not None:
          for ax_item in [ax_admittance, ax_pressure, ax_geometry, ax_flow]:
              ax_item.clear()
@@ -421,17 +400,15 @@ class FluteOperations:
      legend_handles_adm, legend_handles_pres, legend_handles_flow = [], [], []
 
      for index, ((analysis_dict, flute_name_aa), (measurements_data, flute_name_cm)) in enumerate(zip(acoustic_analysis_list, combined_measurements_list)):
-         # ... (lógica para plotear admitancia, presión, flujo como antes) ...
          style_idx = index % len(linestyles)
          color_idx = index % len(base_colors)
          linestyle = linestyles[style_idx]
          color = base_colors[color_idx]
 
          analysis_obj = analysis_dict.get(note)
-         # Asegurarse que estamos usando el flute_name correcto y los datos correctos
          if flute_name_aa != flute_name_cm:
              logger.warning(f"Desajuste de nombres de flauta entre analysis_list ({flute_name_aa}) y measurements_list ({flute_name_cm}). Usando {flute_name_aa}.")
-         flute_name = flute_name_aa # Usar el nombre de la lista de análisis como principal
+         flute_name = flute_name_aa 
 
          if not isinstance(analysis_obj, ImpedanceComputation):
              logger.debug(f"Análisis para nota '{note}' no disponible o inválido para {flute_name}.")
@@ -442,7 +419,6 @@ class FluteOperations:
          valid_impedance = np.where(np.abs(impedance) < 1e-12, 1e-12, impedance)
          admittance_db = 20 * np.log10(np.abs(1.0 / valid_impedance))
 
-         # Admittance Plot
          line_adm, = ax_admittance.plot(frequencies, admittance_db, linestyle=linestyle, color=color, label=flute_name, alpha=0.8)
          if not any(lh.get_label() == flute_name for lh in legend_handles_adm):
              legend_handles_adm.append(line_adm)
@@ -459,26 +435,21 @@ class FluteOperations:
                  ax_admittance.text(f_ar, ymin_adm + (ymax_adm - ymin_adm) * (0.95 - index*0.08), f"{f_ar:.0f}",
                                  rotation=90, color=color, fontsize=7, ha='right', va='top', bbox=dict(facecolor='white', alpha=0.5, pad=0.1, edgecolor='none'))
 
-         # Pressure and Flow Plots
          x_coords, pressure_modes, flow_modes = analysis_obj.get_pressure_flow()
          pressure_abs = np.abs(pressure_modes.T)
          flow_abs = np.abs(flow_modes.T)
 
-         # Iterar para los dos primeros armónicos (antirresonancias)
-         for i_mode, f_mode in enumerate(antires_freqs[:2]): # Tomar hasta 2 antirresonancias
+         for i_mode, f_mode in enumerate(antires_freqs[:2]): 
              if pressure_abs.shape[1] > 0 and flow_abs.shape[1] > 0:
                  idx_f_mode = np.argmin(np.abs(frequencies - f_mode))
-                 if idx_f_mode < pressure_abs.shape[1]: # Comprobar que el índice es válido
-                     # Usar un estilo de línea ligeramente diferente para el segundo armónico si es la misma flauta
+                 if idx_f_mode < pressure_abs.shape[1]: 
                      mode_linestyle = linestyle if i_mode == 0 else '--' 
                      mode_alpha = 0.8 if i_mode == 0 else 0.6
-
                      line_pres, = ax_pressure.plot(x_coords, pressure_abs[:, idx_f_mode], 
                                                   linestyle=mode_linestyle, color=color,
                                                   label=f"{flute_name} (AR{i_mode+1}: {f_mode:.0f}Hz)", alpha=mode_alpha)
                      if not any(lh.get_label() == line_pres.get_label() for lh in legend_handles_pres):
                          legend_handles_pres.append(line_pres)
-
                      line_flow, = ax_flow.plot(x_coords, flow_abs[:, idx_f_mode], 
                                                   linestyle=mode_linestyle, color=color,
                                                   label=f"{flute_name} (AR{i_mode+1}: {f_mode:.0f}Hz)", alpha=mode_alpha)
@@ -487,8 +458,6 @@ class FluteOperations:
          else:
              logger.debug(f"No hay frecuencias antiresonantes o datos de modo para {flute_name}, nota {note}.")
 
-
-         # --- SECCIÓN MODIFICADA PARA EL PANEL DE GEOMETRÍA ---
          if ax_geometry:
              try:
                  class MinimalFluteDataForTopView:
@@ -497,44 +466,32 @@ class FluteOperations:
                          self.flute_model = model_name
                          self.combined_measurements = combined_measurements_data
                          self.data = {"Flute Model": model_name}
-
-                 # Encontrar los combined_measurements para la flauta actual
                  current_flute_measurements = []
                  for cm_data, cm_name in combined_measurements_list:
                      if cm_name == flute_name:
                          current_flute_measurements = cm_data; break
-
                  temp_flute_data_for_top_view = MinimalFluteDataForTopView({note: analysis_obj}, flute_name, current_flute_measurements)
                  temp_flute_ops_for_top_view = FluteOperations(temp_flute_data_for_top_view)
-
-                 # Llamar a plot_top_view_instrument_geometry
-                 # ax_geometry.clear() # plot_top_view_instrument_geometry ya debería limpiar su eje si se le pasa.
                  returned_ax = temp_flute_ops_for_top_view.plot_top_view_instrument_geometry(note=note, ax=ax_geometry)
-
                  if returned_ax is None:
                      logger.error(f"Plotting top view geometry falló y devolvió None para {flute_name}, nota {note}")
-                     # ax_geometry ya podría tener un mensaje de error de la función de ploteo si falló internamente
-                 elif returned_ax is not ax_geometry and returned_ax is not None : # type: ignore
-                      # Esto no debería suceder si ax_geometry se pasa y se usa correctamente.
-                     logger.warning("plot_top_view_instrument_geometry podría haber creado un nuevo eje inesperadamente. Cerrando figura extra.")
-                     plt.close(returned_ax.figure) # type: ignore
-
+                 elif returned_ax is not ax_geometry and returned_ax is not None : 
+                      logger.warning("plot_top_view_instrument_geometry podría haber creado un nuevo eje inesperadamente. Cerrando figura extra.")
+                      plt.close(returned_ax.figure) 
              except Exception as e_geom_top_view:
                  logger.error(f"Error al graficar la vista superior de la geometría para {flute_name}, nota {note}: {e_geom_top_view}")
-                 if ax_geometry: # Solo si el eje existe
+                 if ax_geometry: 
                      ax_geometry.clear() 
                      ax_geometry.text(0.5,0.5, f"Error geom. sup. {flute_name}", ha='center', va='center', transform=ax_geometry.transAxes, color='red')
-         # --- FIN DE LA SECCIÓN MODIFICADA ---
 
-     # Configuración de títulos y etiquetas para los ejes (como estaba antes)
      if ax_admittance:
          ax_admittance.set_title(f"Admitancia para {note}", fontsize=10); ax_admittance.set_xlabel("Frecuencia (Hz)")
          ax_admittance.set_ylabel("Admitancia (dB)"); ax_admittance.legend(handles=legend_handles_adm, loc='best', fontsize=8); ax_admittance.grid(True, linestyle=':', alpha=0.7)
      if ax_pressure:
          ax_pressure.set_title(f"Presión vs Posición ({note})", fontsize=10); ax_pressure.set_xlabel("Posición (m)")
          ax_pressure.set_ylabel("Presión (Pa)"); ax_pressure.legend(handles=legend_handles_pres, loc='best', fontsize=8); ax_pressure.grid(True, linestyle=':', alpha=0.7)
-     if ax_geometry: # El título lo pone plot_top_view_instrument_geometry
-         ax_geometry.set_title(f"Geometría (Vista Sup.) para {note} ({flute_name})", fontsize=10); ax_geometry.set_xlabel("Posición (mm)")
+     if ax_geometry: 
+         ax_geometry.set_title(f"Geometría (Vista Sup.) para {note}", fontsize=10); ax_geometry.set_xlabel("Posición (mm)") # Título general
          ax_geometry.set_ylabel("Radio (mm)"); ax_geometry.grid(True, linestyle=':', alpha=0.7)
      if ax_flow:
          ax_flow.set_title(f"Flujo vs Posición ({note})", fontsize=10); ax_flow.set_xlabel("Posición (m)")
@@ -608,14 +565,13 @@ class FluteOperations:
                 if isinstance(analysis_obj, ImpedanceComputation):
                     antires_freqs = list(analysis_obj.antiresonance_frequencies())
                     if antires_freqs:
-                        for i_ar, f_ar in enumerate(antires_freqs[:2]): # Max 2 ARs
+                        for i_ar, f_ar in enumerate(antires_freqs[:2]): 
                             x_pos = note_idx + offsets[index]
                             ax.plot(x_pos, f_ar, "o", color=color, markersize=6, alpha=0.7)
                             if i_ar < 2:
                                  ax.text(x_pos, f_ar + (10 * (-1)**i_ar), f"{f_ar:.0f}", fontsize=7,
                                          ha="center", va="bottom" if i_ar % 2 == 0 else "top", color=color,
                                          bbox=dict(facecolor='white', alpha=0.3, pad=0.1, edgecolor='none'))
-            # Add to legend once per flute
             if not any(lh.get_label() == flute_name for lh in legend_handles):
                 legend_handles.append(plt.Line2D([0], [0], marker='o', color=color, linestyle='None', label=flute_name, markersize=6))
 
@@ -644,13 +600,12 @@ class FluteOperations:
         offset_per_flute = 0.12
         base_x_positions = np.arange(len(notes_ordered))
 
+        legend_handles = [] 
         for index, (analysis_dict, flute_name) in enumerate(acoustic_analysis_list):
             linestyle = linestyles[index % len(linestyles)]
             color = base_colors[index % len(base_colors)]
             cents_diffs = []
-
             current_x_offset = (index - (num_flutes - 1) / 2.0) * offset_per_flute
-
             for note in notes_ordered:
                 note_cents = np.nan
                 analysis_obj = analysis_dict.get(note)
@@ -660,11 +615,11 @@ class FluteOperations:
                         f1, f2 = antires_freqs[0], antires_freqs[1]
                         if f1 > 0 and f2 > 0: note_cents = 1200 * np.log2(f2 / (2.0 * f1))
                 cents_diffs.append(note_cents)
+            line, = ax.plot(base_x_positions + current_x_offset, cents_diffs, marker="o", linestyle=linestyle, color=color, label=flute_name, markersize=5, alpha=0.8)
+            if not any(lh.get_label() == flute_name for lh in legend_handles):
+                legend_handles.append(line)
 
-            ax.plot(base_x_positions + current_x_offset, cents_diffs, marker="o", linestyle=linestyle, color=color, label=flute_name, markersize=5, alpha=0.8)
-
-        handles, labels = ax.get_legend_handles_labels()
-        ax.legend(handles, labels, loc='best', fontsize=9)
+        if legend_handles: ax.legend(handles=legend_handles, loc='best', fontsize=9)
         ax.set_xticks(base_x_positions)
         ax.set_xticklabels(notes_ordered, rotation=45, ha="right")
         ax.axhline(0, color='grey', linestyle='--', lw=0.8)
@@ -691,14 +646,13 @@ class FluteOperations:
         offset_per_flute = 0.12
         base_x_positions = np.arange(len(notes_ordered))
 
+        legend_handles = [] 
         for index, (analysis_dict, flute_name) in enumerate(acoustic_analysis_list):
             linestyle = linestyles[index % len(linestyles)]
             color = base_colors[index % len(base_colors)]
             moc_vals = []
             current_finger_freqs = finger_frequencies_map.get(flute_name, {})
             current_x_offset = (index - (num_flutes - 1) / 2.0) * offset_per_flute
-
-
             for note in notes_ordered:
                 moc = np.nan
                 f_play = current_finger_freqs.get(note)
@@ -707,18 +661,17 @@ class FluteOperations:
                     antires = list(analysis_obj.antiresonance_frequencies())
                     if len(antires) >= 2:
                         f0, f1 = antires[0], antires[1]
-                        # Ensure f0, f1, f_play are positive and denominators are not zero
                         if f0 > 0 and f1 > 0 and f_play > 0 and f0 != f_play and (2.0 * f_play) != 0 and f1 != (2.0*f_play) :
                             num_term = (1.0 / f1) - (1.0 / (2.0 * f_play))
                             den_term = (1.0 / f0) - (1.0 / f_play)
-                            if abs(den_term) > 1e-9: # Avoid division by zero
+                            if abs(den_term) > 1e-9: 
                                 moc = num_term / den_term
                 moc_vals.append(moc)
+            line, = ax.plot(base_x_positions + current_x_offset, moc_vals, marker="o", linestyle=linestyle, color=color, label=flute_name, markersize=5, alpha=0.8)
+            if not any(lh.get_label() == flute_name for lh in legend_handles):
+                legend_handles.append(line)
 
-            ax.plot(base_x_positions + current_x_offset, moc_vals, marker="o", linestyle=linestyle, color=color, label=flute_name, markersize=5, alpha=0.8)
-
-        handles, labels = ax.get_legend_handles_labels()
-        ax.legend(handles, labels, loc='best', fontsize=9)
+        if legend_handles: ax.legend(handles=legend_handles, loc='best', fontsize=9)
         ax.set_xticks(base_x_positions)
         ax.set_xticklabels(notes_ordered, rotation=45, ha="right")
         ax.set_xlabel("Nota"); ax.set_ylabel("MOC (ratio)"); ax.set_title("Resumen de MOC por Nota", fontsize=10); ax.grid(True, linestyle=':', alpha=0.7)
@@ -740,54 +693,39 @@ class FluteOperations:
 
         num_flutes = len(acoustic_analysis_list)
         base_x_positions = np.arange(len(notes_ordered))
-        # Width for each flute's BI/ESPE pair, and spacing
         total_width_per_flute_group = 0.3
-        inter_flute_spacing_factor = 0.15 # Factor of total_width_per_flute_group
-
+        inter_flute_spacing_factor = 0.15 
 
         def get_speed_of_sound(temp_celsius=20.0): return 331.3 * np.sqrt(1 + temp_celsius / 273.15)
         speed_of_sound_ref = get_speed_of_sound(20.0)
-
-        legend_items = {} # To store unique legend entries {label: handle}
+        legend_items = {} 
 
         for idx, (analysis_dict, flute_name) in enumerate(acoustic_analysis_list):
             color = base_colors[idx % len(base_colors)]
             bi_vals, espe_vals = [], []
             current_finger_freqs = finger_frequencies_map.get(flute_name, {})
-
             for note in notes_ordered:
                 bi, espe = np.nan, np.nan
                 f_play_I = current_finger_freqs.get(note)
                 analysis_obj = analysis_dict.get(note)
-
                 if isinstance(analysis_obj, ImpedanceComputation) and f_play_I is not None and f_play_I > 0:
                     antires = list(analysis_obj.antiresonance_frequencies())
                     if len(antires) >= 2:
                         f0, f1 = antires[0], antires[1]
                         f_play_II = 2.0 * f_play_I
-
                         if f0 > 0: bi = 1200.0 * np.log2(f_play_I / f0)
-
                         delta_l_I = (speed_of_sound_ref / 2.0) * ((1.0 / f_play_I) - (1.0 / f0)) if f0 > 0 else 0.0
                         delta_l_II = speed_of_sound_ref * ((1.0 / f_play_II) - (1.0 / f1)) if f1 > 0 and f_play_II > 0 else 0.0
                         delta_delta_l = delta_l_II - delta_l_I
                         L_eff_I = (speed_of_sound_ref / (2.0 * f_play_I))
-
-                        if L_eff_I > 0 and (L_eff_I + delta_delta_l) > 1e-9: # Avoid log of zero/negative and division by zero
+                        if L_eff_I > 0 and (L_eff_I + delta_delta_l) > 1e-9: 
                             espe = 1200.0 * np.log2(L_eff_I / (L_eff_I + delta_delta_l))
                 bi_vals.append(bi); espe_vals.append(espe)
-
-            # Calculate offset for this flute's group
             group_center_offset = (idx - (num_flutes - 1) / 2.0) * (total_width_per_flute_group * (1 + inter_flute_spacing_factor))
-            
-            # Plot BI
             line_bi, = ax.plot(base_x_positions + group_center_offset - total_width_per_flute_group/4, bi_vals,
                     linestyle='-', color=color, marker='o', markersize=5, alpha=0.8)
-            # Plot ESPE
             line_espe, = ax.plot(base_x_positions + group_center_offset + total_width_per_flute_group/4, espe_vals,
-                    linestyle='--', dashes=(4,2), color=color, marker='x', markersize=5, alpha=0.8) # Dashes for better distinction
-
-            # Add to legend items only once per flute
+                    linestyle='--', dashes=(4,2), color=color, marker='x', markersize=5, alpha=0.8) 
             if f"{flute_name} - $B_I$" not in legend_items:
                 legend_items[f"{flute_name} - $B_I$"] = line_bi
             if f"{flute_name} - ESPE" not in legend_items:
@@ -796,10 +734,9 @@ class FluteOperations:
         if legend_items:
             ax.legend(legend_items.values(), legend_items.keys(), fontsize=8, loc='best', ncol=max(1, num_flutes // 2))
 
-
         ax.set_xticks(base_x_positions)
         ax.set_xticklabels(notes_ordered, rotation=45, ha="right")
-        ax.axhline(0, color='grey', linestyle='--', lw=0.8) # Linea en 0 cents
+        ax.axhline(0, color='grey', linestyle='--', lw=0.8) 
         ax.set_title("$B_I$ y ESPE a Través de las Notas", fontsize=10); ax.set_xlabel("Nota"); ax.set_ylabel("Cents"); ax.grid(True, linestyle=':', alpha=0.7)
         fig.tight_layout()
         return fig
@@ -822,3 +759,4 @@ class FluteOperations:
 
         logger.info(f"Reporte PDF de resumen guardado en: {pdf_filename}")
         return pdf_filename
+

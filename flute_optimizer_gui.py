@@ -22,6 +22,7 @@ try:
     from optimize_flute_from_json import optimize_flute_from_json_full, plot_optimized_admittances
     from openwind import InstrumentPhysics, InstrumentGeometry
     from constants import MM_TO_M_FACTOR as MM_TO_M_FACTOR_CONST, M_TO_MM_FACTOR as M_TO_MM_FACTOR_CONST
+    from flute_data import FluteData, FluteDataInitializationError # <--- AÑADIDO
     from flute_operations import FluteOperations # Para plot_shape_static y plot_holes_static
 except ImportError as e:
     # Este es un error crítico si estos módulos base no se encuentran.
@@ -235,19 +236,79 @@ class FluteOptimizerApp(tk.Tk):
         self.pressure_flow_data_per_note = None
         self.optimized_notes_list = None
         self._clear_all_plot_canvases()
+        
+        # --- Carga interactiva de FluteData ---
+        flute_data_obj_for_optim: Optional[FluteData] = None
+        data_path_for_optim = self.flute_dir_path # Ya es un Path
+        flute_dir_name_for_optim = self.flute_name
+
+        while True: # Bucle para reintentar después de editar
+            try:
+                logger.info(f"Optimizador: Intentando cargar FluteData desde: {data_path_for_optim}")
+                # FluteData se encarga de leer los JSONs y la validación inicial.
+                # Para la optimización, necesitamos el análisis acústico, así que skip_acoustic_analysis=False (o no se pasa)
+                # Sin embargo, para la validación inicial antes de la optimización, podríamos saltarlo
+                # y luego re-instanciar o llamar a compute_acoustic_analysis si la geometría es válida.
+                # Por simplicidad aquí, intentaremos una carga completa, y si falla por geometría
+                # antes del análisis, se ofrecerá editar.
+                current_flute_data_attempt = FluteData(
+                    str(data_path_for_optim),
+                    source_name=flute_dir_name_for_optim,
+                    la_frequency=diapason_val,
+                    temperature=temp_val,
+                    skip_acoustic_analysis=False # Queremos el análisis para la optimización
+                )
+
+                if not current_flute_data_attempt.validation_errors:
+                    if current_flute_data_attempt.validation_warnings:
+                        warning_messages = "\n".join([w.get('message', 'Advertencia desconocida.') for w in current_flute_data_attempt.validation_warnings])
+                        messagebox.showwarning("Advertencias de Validación", f"Advertencias para '{flute_dir_name_for_optim}':\n{warning_messages}", parent=self)
+                    flute_data_obj_for_optim = current_flute_data_attempt
+                    break # Carga exitosa
+
+                error_info = current_flute_data_attempt.validation_errors[0]
+                error_message = error_info.get('message', 'Error desconocido.')
+                part_with_error = error_info.get('part')
+                file_to_edit_path_obj: Optional[Path] = None
+                if part_with_error:
+                    file_to_edit_path_obj = data_path_for_optim / f"{part_with_error}.json"
+
+                prompt_message = f"Error en datos JSON para '{flute_dir_name_for_optim}':\n- {error_message}\n\n"
+                
+                if file_to_edit_path_obj and file_to_edit_path_obj.exists():
+                    prompt_message += f"¿Desea editar el archivo '{file_to_edit_path_obj.name}' para corregirlo?"
+                    user_choice = messagebox.askyesnocancel("Error de Datos JSON", prompt_message, parent=self, icon=messagebox.ERROR)
+                    if user_choice is True: # Sí, editar
+                        editor = TraditionalTextEditor(self) # Usar la clase definida en este archivo
+                        editor.load_file_content(str(file_to_edit_path_obj)) # Asumir que editor tiene este método
+                        self.wait_window(editor)
+                        continue # Reintentar carga
+                    elif user_choice is False: # No, no editar
+                        flute_data_obj_for_optim = None; break 
+                    else: # Cancelar
+                        self.results_text.config(state=tk.NORMAL); self.results_text.insert(tk.END, "Optimización cancelada por el usuario.\n"); self.results_text.config(state=tk.DISABLED); return
+                else: # Error general o archivo no identificable
+                    messagebox.showerror("Error de Datos JSON", prompt_message, parent=self)
+                    flute_data_obj_for_optim = None; break
+            except (FluteDataInitializationError, Exception) as e_load_fd:
+                messagebox.showerror("Error de Carga de Flauta", f"Error al cargar datos para '{flute_dir_name_for_optim}':\n{e_load_fd}\n\nNo se puede optimizar.", parent=self)
+                flute_data_obj_for_optim = None; break
+        
+        if not flute_data_obj_for_optim:
+            self.results_text.config(state=tk.NORMAL); self.results_text.insert(tk.END, f"No se pudo cargar la flauta '{flute_dir_name_for_optim}' para optimización debido a errores.\n"); self.results_text.config(state=tk.DISABLED); return
+        # --- Fin de Carga interactiva de FluteData ---
 
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete("1.0", tk.END)
         self.results_text.insert(tk.END, f"Optimizando para flauta: {self.flute_name}\n")
         self.results_text.insert(tk.END, f"Diapasón A4 = {diapason_val} Hz, Temperatura = {temp_val} °C\n\n")
         self.update_idletasks()
-
         try:
             self.optimized_chimney_heights, self.initial_admittance_data_per_note, \
             self.optimized_admittance_data_per_note, model_name, self.target_frequencies_map, diapason_used, \
             self.physics_states_per_note, self.pressure_flow_data_per_note, self.optimized_notes_list = \
                 optimize_flute_from_json_full(
-                    flute_dir_path_str=str(self.flute_dir_path),
+                    flute_data_instance=flute_data_obj_for_optim, # Pasar la instancia cargada
                     diapason_a4_hz_gui=diapason_val,
                     target_temp_c_gui=temp_val
                 )
