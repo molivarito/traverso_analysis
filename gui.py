@@ -6,14 +6,19 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 
-from flute_data import FluteData, FluteDataInitializationError
+from flute_data import FluteData, FluteDataInitializationError # Asegúrate que FluteData se importa bien
 from flute_operations import FluteOperations
 from constants import BASE_COLORS, LINESTYLES, FLUTE_PARTS_ORDER
+import logging # <--- AÑADIR ESTA LÍNEA
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_JSON_DIR = SCRIPT_DIR / "data_json"
 if not DEFAULT_DATA_JSON_DIR.exists():
      DEFAULT_DATA_JSON_DIR = SCRIPT_DIR.parent / "data_json"
+
+# --- Configuración básica de logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s [%(name)s:%(funcName)s:%(lineno)d] - %(message)s')
+logger = logging.getLogger(__name__) # Logger para este módulo (gui.py)
 
 class TraditionalTextEditor(tk.Toplevel):
     def __init__(self, master=None):
@@ -242,6 +247,7 @@ class App(tk.Tk):
         self.inharmonic_frame = ttk.Frame(self.notebook)
         self.moc_frame = ttk.Frame(self.notebook)
         self.bi_espe_frame = ttk.Frame(self.notebook)
+        # self.assembly_debug_frame = ttk.Frame(self.notebook) # Pestaña eliminada
 
         self.notebook.add(self.profile_frame, text="Perfil Combinado")
         self.notebook.add(self.parts_frame, text="Partes Individuales")
@@ -249,6 +255,7 @@ class App(tk.Tk):
         self.notebook.add(self.inharmonic_frame, text="Inharmonicidad (Resumen)")
         self.notebook.add(self.moc_frame, text="MOC (Resumen)")
         self.notebook.add(self.bi_espe_frame, text="B_I & ESPE (Resumen)")
+        # self.notebook.add(self.assembly_debug_frame, text="Ensamblaje Físico/Acústico") # Pestaña eliminada
 
         note_selection_frame = ttk.Frame(self.admittance_frame)
         note_selection_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(5,2))
@@ -371,6 +378,10 @@ class App(tk.Tk):
 
             if flute_data_obj: 
                 print(f"DEBUG: load_flutes - FluteData cargada para: {flute_dir_name}")
+                # --- INICIO DEBUG IMPORTACIÓN ---
+                import inspect
+                print(f"DEBUG: flute_operations module path: {inspect.getfile(FluteOperations)}")
+                # --- FIN DEBUG IMPORTACIÓN ---
                 flute_ops_obj = FluteOperations(flute_data_obj)
                 
                 self.flute_ops_list.append(flute_ops_obj)
@@ -437,45 +448,118 @@ class App(tk.Tk):
         self.update_inharmonic_plot()
         self.update_moc_plot()
         self.update_bi_espe_plot()
+        # self.update_assembly_debug_plot() # Llamada eliminada
 
     def update_profile_plot(self):
         if not self.flute_ops_list: return
-        fig, ax = plt.subplots(figsize=(12, 7))
+        
+        # Crear figura con dos subplots
+        fig, (ax_physical, ax_acoustic) = plt.subplots(2, 1, figsize=(12, 10), sharex=False)
+        fig.subplots_adjust(hspace=0.3) # Añadir espacio vertical entre subplots
+
+        # --- Subplot 1: Ensamblaje Físico Estimado ---
+        flute_names_str_list = [fo.flute_data.flute_model for fo in self.flute_ops_list]
+        title_physical = f"Ensamblaje Físico Estimado: {', '.join(flute_names_str_list)}"
+        ax_physical.set_title(title_physical)
+        ax_physical.set_xlabel("Posición Absoluta Estimada (mm)")
+        ax_physical.set_ylabel("Diámetro (mm)")
+        ax_physical.grid(True, linestyle=':', alpha=0.7)
+        overall_max_x_physical_all_flutes = 0
+
         for i, flute_ops in enumerate(self.flute_ops_list):
             flute_model_name = flute_ops.flute_data.flute_model
+            max_x_this_flute = flute_ops.plot_physical_assembly(
+                ax=ax_physical,
+                plot_label_suffix=flute_model_name,
+                overall_linestyle=LINESTYLES[i % len(LINESTYLES)]
+            )
+            if max_x_this_flute is not None:
+                 overall_max_x_physical_all_flutes = max(overall_max_x_physical_all_flutes, max_x_this_flute)
+
+        # handles_phys, labels_phys = ax_physical.get_legend_handles_labels() # Leyenda eliminada
+        # by_label_phys = dict(zip(labels_phys, handles_phys))
+        # ax_physical.legend(by_label_phys.values(), by_label_phys.keys(), fontsize='small', loc='best') # Leyenda eliminada
+        if overall_max_x_physical_all_flutes > 0:
+            ax_physical.set_xlim(-10, overall_max_x_physical_all_flutes + 10)
+
+        # --- Subplot 2: Perfil Acústico Interno Combinado ---
+        ax_acoustic.set_title("Perfil Acústico Interno Combinado (Comparativo)")
+        ax_acoustic.set_xlabel("Posición (mm) desde el corcho")
+        ax_acoustic.set_ylabel("Diámetro (mm)")
+        ax_acoustic.grid(True, linestyle=':', alpha=0.7)
+        
+        min_diam_all_acoustic_profiles = float('inf')
+        max_overall_cork_relative_pos = -float('inf')
+        min_overall_cork_relative_pos = float('inf')
+
+        # Primera pasada para obtener el mínimo diámetro para posicionar los agujeros
+        for flute_ops in self.flute_ops_list:
+            if flute_ops.flute_data.combined_measurements:
+                min_diam_this_flute = min(m['diameter'] for m in flute_ops.flute_data.combined_measurements)
+                min_diam_all_acoustic_profiles = min(min_diam_all_acoustic_profiles, min_diam_this_flute)
+        
+        for i, flute_ops in enumerate(self.flute_ops_list): # i se usa para colores/estilos y offset de agujeros
+            flute_model_name = flute_ops.flute_data.flute_model
+            headjoint_data_for_offset = flute_ops.flute_data.data.get(FLUTE_PARTS_ORDER[0], {})
+            stopper_abs_pos_mm_for_offset = headjoint_data_for_offset.get('_calculated_stopper_absolute_position_mm', 0.0)
+            
             flute_ops.plot_combined_flute_data(
-                ax=ax,
+                ax=ax_acoustic,
                 plot_label=flute_model_name,
                 flute_color=BASE_COLORS[i % len(BASE_COLORS)],
-                flute_style=LINESTYLES[i % len(LINESTYLES)]
+                flute_style=LINESTYLES[i % len(LINESTYLES)],
+                show_mortise_markers=False,
+                x_axis_origin_offset=stopper_abs_pos_mm_for_offset # Pasar el offset del corcho
             )
-            if flute_ops.flute_data.combined_measurements:
-                min_diam_profile = min(m['diameter'] for m in flute_ops.flute_data.combined_measurements if 'diameter' in m) if flute_ops.flute_data.combined_measurements else 10
-                y_pos_holes = min_diam_profile - (5 + i * 0.5)
+            if flute_ops.flute_data.combined_measurements: # Asegurar que hay mediciones
+                cork_rel_positions_this_flute = [(m['position'] - stopper_abs_pos_mm_for_offset) for m in flute_ops.flute_data.combined_measurements]
+                if cork_rel_positions_this_flute:
+                    max_overall_cork_relative_pos = max(max_overall_cork_relative_pos, max(cork_rel_positions_this_flute))
+                    min_overall_cork_relative_pos = min(min_overall_cork_relative_pos, min(cork_rel_positions_this_flute))
+            
+            # Añadir marcadores de agujeros al perfil acústico
+            y_pos_holes_acoustic = (min_diam_all_acoustic_profiles if min_diam_all_acoustic_profiles != float('inf') else 10) - (3 + i * 1.5) # Offset para cada flauta
+            
+            # Lógica para calcular el inicio físico de cada parte (para posicionar agujeros)
+            # Similar a la de FluteData.get_openwind_geometry_inputs
+            part_physical_starts_map: Dict[str, float] = {}
+            current_physical_connection_point_abs = 0.0
+            # stopper_abs_pos_mm ya está disponible como stopper_abs_pos_mm_for_offset
+            stopper_abs_pos_mm = stopper_abs_pos_mm_for_offset
 
-                current_abs_pos_holes = 0.0
-                for part_name_hole in FLUTE_PARTS_ORDER:
-                    part_data_hole = flute_ops.flute_data.data.get(part_name_hole, {})
-                    hole_positions_rel = part_data_hole.get("Holes position", [])
-                    hole_diameters_rel = part_data_hole.get("Holes diameter", [])
+            for idx_part_calc, part_name_calc in enumerate(FLUTE_PARTS_ORDER):
+                part_data_calc = flute_ops.flute_data.data.get(part_name_calc, {})
+                part_total_length_calc = part_data_calc.get("Total length", 0.0)
+                part_mortise_length_calc = part_data_calc.get("Mortise length", 0.0)
 
-                    for h_pos, h_diam in zip(hole_positions_rel, hole_diameters_rel):
-                        abs_hole_pos = current_abs_pos_holes + h_pos
-                        marker_size_scaled = max(h_diam * 0.8, 3)
-                        ax.plot(abs_hole_pos, y_pos_holes,
-                                marker='o', color=BASE_COLORS[i % len(BASE_COLORS)],
-                                markersize=marker_size_scaled,
-                                linestyle='None', alpha=0.7)
+                if idx_part_calc == 0: # Headjoint
+                    part_physical_starts_map[part_name_calc] = 0.0
+                    current_physical_connection_point_abs = part_total_length_calc - part_mortise_length_calc
+                elif idx_part_calc == 1: # Left
+                    part_physical_starts_map[part_name_calc] = current_physical_connection_point_abs
+                    current_physical_connection_point_abs += part_total_length_calc
+                else: # Right, Foot
+                    part_physical_starts_map[part_name_calc] = current_physical_connection_point_abs - part_mortise_length_calc
+                    current_physical_connection_point_abs = part_physical_starts_map[part_name_calc] + part_total_length_calc
 
-                    total_length_part = part_data_hole.get("Total length", 0.0)
-                    mortise_length_part = part_data_hole.get("Mortise length", 0.0)
-                    if FLUTE_PARTS_ORDER.index(part_name_hole) < len(FLUTE_PARTS_ORDER) -1 :
-                        current_abs_pos_holes += (total_length_part - mortise_length_part)
+            for part_name_hole in FLUTE_PARTS_ORDER:
+                part_data_hole = flute_ops.flute_data.data.get(part_name_hole, {})
+                part_physical_start_abs_mm = part_physical_starts_map.get(part_name_hole, 0.0)
+                for h_pos_rel, h_diam in zip(part_data_hole.get("Holes position", []), part_data_hole.get("Holes diameter", [])):
+                    abs_physical_hole_pos = part_physical_start_abs_mm + h_pos_rel
+                    plot_pos_on_acoustic = abs_physical_hole_pos - stopper_abs_pos_mm # Centro X del agujero
+                    # Usar 'o' como marcador y escalar markersize con el diámetro del agujero
+                    marker_size_scaled = max(h_diam * 0.8, 3) 
+                    ax_acoustic.plot(plot_pos_on_acoustic, y_pos_holes_acoustic, marker='o', color=BASE_COLORS[i % len(BASE_COLORS)], markersize=marker_size_scaled, linestyle='None', alpha=0.7)
 
-        if len(self.flute_ops_list) > 0 :
-            ax.legend(loc='best', title="Flautas")
+        handles_ac, labels_ac = ax_acoustic.get_legend_handles_labels()
+        by_label_ac = dict(zip(labels_ac, handles_ac))
+        ax_acoustic.legend(by_label_ac.values(), by_label_ac.keys(), fontsize='small', loc='best')
+        if max_overall_cork_relative_pos > -float('inf'):
+            ax_acoustic.set_xlim(min_overall_cork_relative_pos - 10, max_overall_cork_relative_pos + 10)
+        else: # Fallback si no hay datos
+            ax_acoustic.set_xlim(-50, 600) # Un rango por defecto razonable
 
-        ax.set_title("Perfiles Combinados de Flautas")
         self._setup_plot_canvas(self.profile_frame, fig)
 
     def update_parts_plot(self):
@@ -514,7 +598,8 @@ class App(tk.Tk):
                     y_pos_for_holes = min_diam_this_part_this_flute - (5 + flute_idx * 1.5)
 
                     for h_pos, h_diam in zip(hole_positions_part, hole_diameters_part):
-                        marker_size_scaled_part = max(h_diam * 0.8, 3)
+                        # Usar 'o' como marcador y escalar markersize con el diámetro del agujero
+                        marker_size_scaled_part = max(h_diam * 0.8, 3) # Consistente con el perfil acústico
                         ax_part.plot(h_pos, y_pos_for_holes,
                                      marker='o', color=current_flute_color,
                                      markersize=marker_size_scaled_part,
@@ -559,6 +644,7 @@ class App(tk.Tk):
             self.ordered_notes_for_summary
         )
         self._setup_plot_canvas(self.bi_espe_frame, fig)
+
 
     def update_admittance_note_options(self):
         if not self.ordered_notes_for_summary:
