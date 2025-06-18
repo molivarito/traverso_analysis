@@ -336,7 +336,7 @@ class FluteOperations:
             
             # Aplicar la etiqueta principal solo a la primera parte de la flauta
             current_part_plot_label = None
-            if not main_flute_label_applied and plot_label_suffix:
+            if not main_flute_label_applied and plot_label_suffix and plot_label_suffix != "_nolegend_":
                 current_part_plot_label = plot_label_suffix
                 main_flute_label_applied = True
             
@@ -377,7 +377,7 @@ class FluteOperations:
             marker_y_bottom = min_diam_marker + 0.05 * (max_diam_marker - min_diam_marker)
             marker_y_top = max_diam_marker - 0.05 * (max_diam_marker - min_diam_marker)
             ax.vlines(stopper_pos_mm, marker_y_bottom, marker_y_top, 
-                      colors='purple', linestyles='dashdot', alpha=0.8, label='_nolegend_') # No añadir a la leyenda principal
+                      colors='purple', linestyles='dashdot', alpha=0.8, label=None) # No añadir a la leyenda principal
 
         # La leyenda y xlim se manejan en la GUI para el consolidado
         return overall_max_x_physical
@@ -506,7 +506,7 @@ class FluteOperations:
             acoustic_analysis_obj.plot_instrument_geometry(ax=ax)
 
             ax.set_title(f"Geometría (Openwind) para {note} - {self.flute_data.flute_model}", fontsize=10)
-            ax.set_xlabel("Posición (m)")
+            ax.set_xlabel("Posición relativa al corcho (m)")
             ax.set_ylabel("Radio (m)")
             ax.grid(True, linestyle=':', alpha=0.7)
             return ax

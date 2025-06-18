@@ -326,15 +326,20 @@ class FluteExperimentApp(tk.Tk):
         if updated_data_from_editor != self.modified_flute_data_dict:
             self.modified_flute_data_dict = updated_data_from_editor
             self.has_modifications = True
-            self.data_modified_since_analysis = True
+            self.data_modified_since_analysis = True # Marcar que los datos cambiaron
             self.analyze_button.config(state=tk.NORMAL)
             self.reset_button.config(state=tk.NORMAL)
             self.file_menu.entryconfig("Save Modified Geometry As...", state=tk.NORMAL)
-            logger.info("Modifications applied from editor.")
+            logger.info("Modifications applied from editor. Triggering analysis...")
+            
+            # Llamar a _analyze_modified para recalcular y actualizar todos los plots
+            self._analyze_modified() 
+            # La llamada a _update_geometry_plot() ya no es necesaria aquí
+            # porque _analyze_modified() llama a _update_all_plots() que incluye la geometría.
+
         else:
             logger.info("Editor closed, but data is identical to current modified data.")
-
-        self._update_geometry_plot()
+        # self._update_geometry_plot() # Esta línea se vuelve redundante
 
     def _reset_modifications(self):
         if not self.original_flute_data_dict:
@@ -441,11 +446,19 @@ class FluteExperimentApp(tk.Tk):
 
         if self.original_flute_ops:
             try:
-                # Usar plot_physical_assembly para dibujar el ensamblaje físico
+                # 1. Dibujar el Ensamblaje Físico (tenue y discontinuo, sin leyenda principal aquí)
                 max_x_orig = self.original_flute_ops.plot_physical_assembly(
                     ax=ax, 
-                    plot_label_suffix=f"{self.original_flute_ops.flute_data.flute_model} (Original)",
-                    overall_linestyle='-' # Usar el color por defecto de la función, solo especificar estilo
+                    plot_label_suffix="_nolegend_", # No añadir a la leyenda principal
+                    overall_linestyle='--' # Estilo discontinuo para el físico
+                )
+                # 2. Dibujar el Perfil Acústico (sólido, con leyenda)
+                self.original_flute_ops.plot_combined_flute_data(
+                    ax=ax,
+                    plot_label=f"{self.original_flute_ops.flute_data.flute_model} (Acoustic Profile)",
+                    flute_style='-', # Estilo continuo para el perfil acústico
+                    x_axis_origin_offset=0.0, # Usar posiciones absolutas físicas
+                    show_mortise_markers=False # Los marcadores físicos ya están
                 )
                 if max_x_orig is not None:
                     overall_max_x_physical_all_flutes = max(overall_max_x_physical_all_flutes, max_x_orig)
@@ -511,10 +524,19 @@ class FluteExperimentApp(tk.Tk):
                 temp_mod_data_obj = FluteData(source=copy.deepcopy(self.modified_flute_data_dict), source_name=mod_display_name)
                 temp_mod_ops = FluteOperations(temp_mod_data_obj) # FluteOperations para la modificada
 
+                # 1. Dibujar el Ensamblaje Físico (tenue y discontinuo)
                 max_x_mod = temp_mod_ops.plot_physical_assembly(
                     ax=ax,
-                    plot_label_suffix=f"{self.flute_name} (Modificada)",
-                    overall_linestyle='--' # Usar el color por defecto, solo especificar estilo
+                    plot_label_suffix="_nolegend_", # No añadir a la leyenda principal
+                    overall_linestyle=':' # Estilo punteado diferente para el físico modificado
+                )
+                # 2. Dibujar el Perfil Acústico (sólido, con leyenda)
+                temp_mod_ops.plot_combined_flute_data(
+                    ax=ax,
+                    plot_label=f"{self.flute_name} (Modificada - Acoustic)",
+                    flute_style='-', # Estilo continuo
+                    x_axis_origin_offset=0.0,
+                    show_mortise_markers=False
                 )
                 if max_x_mod is not None:
                     overall_max_x_physical_all_flutes = max(overall_max_x_physical_all_flutes, max_x_mod)
@@ -570,8 +592,8 @@ class FluteExperimentApp(tk.Tk):
         if plot_success:
             # El título y las etiquetas de los ejes ya se establecen dentro de plot_physical_assembly
             # Si se llama varias veces, se sobrescribirán, lo cual está bien.
-            # ax.set_title(f"Ensamblaje Físico Estimado: {self.flute_name}", fontsize=10)
-            # ax.set_xlabel("Posición Absoluta Estimada (mm)"); ax.set_ylabel("Diámetro (mm)")
+            ax.set_title(f"Perfil Geométrico y Acústico: {self.flute_name}", fontsize=10)
+            ax.set_xlabel("Posición Absoluta (mm)"); ax.set_ylabel("Diámetro (mm)")
             ax.grid(True, linestyle=':', alpha=0.7)
             handles_all, labels_all = ax.get_legend_handles_labels()
             by_label_all = dict(zip(labels_all, handles_all)) # Eliminar duplicados de leyenda
