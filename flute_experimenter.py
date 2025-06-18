@@ -437,49 +437,68 @@ class FluteExperimentApp(tk.Tk):
         plot_success = False
         legend_handles = []
 
+        overall_max_x_physical_all_flutes = 0 # Para ajustar el límite X del gráfico
+
         if self.original_flute_ops:
             try:
-                # La etiqueta se toma de FluteData.flute_model dentro de plot_combined_flute_data
-                # Para diferenciar, podemos añadir "(Original)" al source_name que pasamos a FluteData
-                # o manejar la etiqueta aquí si es necesario.
-                # Asumimos que FluteData para original_flute_ops tiene un nombre como "FluteName"
-                # y para modified_flute_ops "FluteName_mod".
-                # La función plot_combined_flute_data ahora solo dibuja el perfil.
-                # Necesitamos dibujar los agujeros por separado.
-                self.original_flute_ops.plot_combined_flute_data(
-                    ax=ax, plot_label=f"{self.original_flute_ops.flute_data.flute_model} (Original)",
-                    flute_color='blue', flute_style='-')
-                if ax.lines: legend_handles.append(ax.lines[-1])
+                # Usar plot_physical_assembly para dibujar el ensamblaje físico
+                max_x_orig = self.original_flute_ops.plot_physical_assembly(
+                    ax=ax, 
+                    plot_label_suffix=f"{self.original_flute_ops.flute_data.flute_model} (Original)",
+                    overall_linestyle='-' # Usar el color por defecto de la función, solo especificar estilo
+                )
+                if max_x_orig is not None:
+                    overall_max_x_physical_all_flutes = max(overall_max_x_physical_all_flutes, max_x_orig)
                 plot_success = True
 
                 # Dibujar agujeros para el original
-                min_diam_orig = np.inf
-                if self.original_flute_ops.flute_data.combined_measurements:
-                    min_diam_orig = min(m['diameter'] for m in self.original_flute_ops.flute_data.combined_measurements if 'diameter' in m)
+                all_physical_diameters_orig = []
+                for part_n_orig in FLUTE_PARTS_ORDER:
+                    part_d_orig = self.original_flute_ops.flute_data.data.get(part_n_orig, {})
+                    measurements_orig = part_d_orig.get("measurements", [])
+                    if measurements_orig:
+                        all_physical_diameters_orig.extend([m['diameter'] for m in measurements_orig if 'diameter' in m])
                 
-                y_pos_holes_orig = (min_diam_orig if min_diam_orig != np.inf else 10) - 5 # 5mm por debajo del mínimo
+                min_overall_physical_diameter_orig = min(all_physical_diameters_orig) if all_physical_diameters_orig else 10
+                y_pos_holes_orig = min_overall_physical_diameter_orig - 5 
 
-                current_abs_pos = 0.0
-                for part_name in FLUTE_PARTS_ORDER:
-                    part_data = self.original_flute_ops.flute_data.data.get(part_name, {})
-                    hole_positions = part_data.get("Holes position", [])
-                    hole_diameters = part_data.get("Holes diameter", [])
+                # Lógica para calcular el inicio físico de cada parte (para posicionar agujeros)
+                part_physical_starts_map_orig: Dict[str, float] = {}
+                current_physical_connection_point_abs_orig = 0.0
+                # No necesitamos stopper_abs_pos_mm_orig para el ensamblaje físico
+
+                for idx_part_calc, part_name_calc in enumerate(FLUTE_PARTS_ORDER):
+                    part_data_calc = self.original_flute_ops.flute_data.data.get(part_name_calc, {})
+                    part_total_length_calc = part_data_calc.get("Total length", 0.0)
+                    part_mortise_length_calc = part_data_calc.get("Mortise length", 0.0)
+
+                    if idx_part_calc == 0: # Headjoint
+                        part_physical_starts_map_orig[part_name_calc] = 0.0
+                        current_physical_connection_point_abs_orig = part_total_length_calc - part_mortise_length_calc
+                    elif idx_part_calc == 1: # Left
+                        part_physical_starts_map_orig[part_name_calc] = current_physical_connection_point_abs_orig
+                        current_physical_connection_point_abs_orig += part_total_length_calc
+                    else: # Right, Foot
+                        part_physical_starts_map_orig[part_name_calc] = current_physical_connection_point_abs_orig - part_mortise_length_calc
+                        current_physical_connection_point_abs_orig = part_physical_starts_map_orig[part_name_calc] + part_total_length_calc
+                
+                for part_name_hole_orig in FLUTE_PARTS_ORDER:
+                    part_data_hole_orig = self.original_flute_ops.flute_data.data.get(part_name_hole_orig, {})
+                    part_physical_start_abs_mm_orig = part_physical_starts_map_orig.get(part_name_hole_orig, 0.0)
+                    hole_positions_orig = part_data_hole_orig.get("Holes position", [])
+                    hole_diameters_orig = part_data_hole_orig.get("Holes diameter", [])
                     
-                    for h_pos, h_diam in zip(hole_positions, hole_diameters):
-                        abs_hole_pos = current_abs_pos + h_pos
+                    for h_pos_rel, h_diam in zip(hole_positions_orig, hole_diameters_orig):
+                        abs_physical_hole_pos = part_physical_start_abs_mm_orig + h_pos_rel
+                        plot_pos_on_physical_assembly = abs_physical_hole_pos # Ya es la posición física absoluta
+                        
                         # Usar 'o' como marcador y escalar markersize con el diámetro del agujero
-                        # El factor 0.8 es empírico, ajustar si es necesario para la apariencia deseada
                         marker_size_scaled = max(h_diam * 0.8, 3) 
-                        ax.plot(abs_hole_pos, y_pos_holes_orig, marker='o', 
+                        ax.plot(plot_pos_on_physical_assembly, y_pos_holes_orig, marker='o', 
                                 color='blue', markersize=marker_size_scaled, 
                                 linestyle='None', alpha=0.6)
-                    
-                    # Actualizar current_abs_pos para la siguiente parte (solo cuerpo)
-                    total_length = part_data.get("Total length", 0.0)
-                    mortise_length = part_data.get("Mortise length", 0.0)
-                    if FLUTE_PARTS_ORDER.index(part_name) < len(FLUTE_PARTS_ORDER) -1 : # No sumar para la última parte
-                        current_abs_pos += (total_length - mortise_length)
-
+                # La leyenda de las partes ya la maneja plot_physical_assembly
+                # Los agujeros no necesitan leyenda propia si se colorean igual que la flauta.
 
             except Exception as e: logger.error(f"Error plotting original geometry: {e}")
 
@@ -490,47 +509,75 @@ class FluteExperimentApp(tk.Tk):
                 # Esto no reemplaza self.modified_flute_ops, que solo se crea tras un análisis explícito.
                 mod_display_name = f"{self.flute_name}_mod_preview"
                 temp_mod_data_obj = FluteData(source=copy.deepcopy(self.modified_flute_data_dict), source_name=mod_display_name)
-                temp_mod_ops = FluteOperations(temp_mod_data_obj)
+                temp_mod_ops = FluteOperations(temp_mod_data_obj) # FluteOperations para la modificada
 
-                temp_mod_ops.plot_combined_flute_data(
-                    ax=ax, plot_label=f"{self.flute_name} (Modificada)",
-                    flute_color='orange', flute_style='--')
-                if len(ax.lines) > len(legend_handles): legend_handles.append(ax.lines[-1]) # Añadir la última línea
+                max_x_mod = temp_mod_ops.plot_physical_assembly(
+                    ax=ax,
+                    plot_label_suffix=f"{self.flute_name} (Modificada)",
+                    overall_linestyle='--' # Usar el color por defecto, solo especificar estilo
+                )
+                if max_x_mod is not None:
+                    overall_max_x_physical_all_flutes = max(overall_max_x_physical_all_flutes, max_x_mod)
 
                 # Dibujar agujeros para el modificado
-                min_diam_mod = np.inf
-                if temp_mod_ops.flute_data.combined_measurements: # Usar los combined_measurements del temp_mod_ops
-                    min_diam_mod = min(m['diameter'] for m in temp_mod_ops.flute_data.combined_measurements if 'diameter' in m)
+                all_physical_diameters_mod = []
+                for part_n_mod in FLUTE_PARTS_ORDER:
+                    part_d_mod = temp_mod_ops.flute_data.data.get(part_n_mod, {})
+                    measurements_mod = part_d_mod.get("measurements", [])
+                    if measurements_mod:
+                        all_physical_diameters_mod.extend([m['diameter'] for m in measurements_mod if 'diameter' in m])
+                
+                min_overall_physical_diameter_mod = min(all_physical_diameters_mod) if all_physical_diameters_mod else 10
+                y_pos_holes_mod = min_overall_physical_diameter_mod - 7 # Un poco más abajo para diferenciar
 
-                y_pos_holes_mod = (min_diam_mod if min_diam_mod != np.inf else 10) - 7 # Un poco más abajo para diferenciar
+                part_physical_starts_map_mod: Dict[str, float] = {}
+                current_physical_connection_point_abs_mod = 0.0
+                # No necesitamos stopper_abs_pos_mm_mod para el ensamblaje físico
 
-                current_abs_pos_mod = 0.0
-                for part_name_mod in FLUTE_PARTS_ORDER:
-                    part_data_mod = temp_mod_ops.flute_data.data.get(part_name_mod, {})
-                    hole_positions_mod = part_data_mod.get("Holes position", [])
-                    hole_diameters_mod = part_data_mod.get("Holes diameter", [])
+                for idx_part_calc_mod, part_name_calc_mod in enumerate(FLUTE_PARTS_ORDER):
+                    part_data_calc_mod = temp_mod_ops.flute_data.data.get(part_name_calc_mod, {})
+                    part_total_length_calc_mod = part_data_calc_mod.get("Total length", 0.0)
+                    part_mortise_length_calc_mod = part_data_calc_mod.get("Mortise length", 0.0)
 
-                    for h_pos_m, h_diam_m in zip(hole_positions_mod, hole_diameters_mod):
-                        abs_hole_pos_m = current_abs_pos_mod + h_pos_m
+                    if idx_part_calc_mod == 0: # Headjoint
+                        part_physical_starts_map_mod[part_name_calc_mod] = 0.0
+                        current_physical_connection_point_abs_mod = part_total_length_calc_mod - part_mortise_length_calc_mod
+                    elif idx_part_calc_mod == 1: # Left
+                        part_physical_starts_map_mod[part_name_calc_mod] = current_physical_connection_point_abs_mod
+                        current_physical_connection_point_abs_mod += part_total_length_calc_mod
+                    else: # Right, Foot
+                        part_physical_starts_map_mod[part_name_calc_mod] = current_physical_connection_point_abs_mod - part_mortise_length_calc_mod
+                        current_physical_connection_point_abs_mod = part_physical_starts_map_mod[part_name_calc_mod] + part_total_length_calc_mod
+
+                for part_name_hole_mod in FLUTE_PARTS_ORDER:
+                    part_data_hole_mod = temp_mod_ops.flute_data.data.get(part_name_hole_mod, {})
+                    part_physical_start_abs_mm_mod = part_physical_starts_map_mod.get(part_name_hole_mod, 0.0)
+                    hole_positions_mod = part_data_hole_mod.get("Holes position", [])
+                    hole_diameters_mod = part_data_hole_mod.get("Holes diameter", [])
+
+                    for h_pos_rel_m, h_diam_m in zip(hole_positions_mod, hole_diameters_mod):
+                        abs_physical_hole_pos_m = part_physical_start_abs_mm_mod + h_pos_rel_m
+                        plot_pos_on_physical_assembly_m = abs_physical_hole_pos_m # Ya es la posición física absoluta
                         # Usar 'o' como marcador también para los modificados, el color ya los diferencia
                         marker_size_scaled_m = max(h_diam_m * 0.8, 3)
-                        ax.plot(abs_hole_pos_m, y_pos_holes_mod, marker='o', 
+                        ax.plot(plot_pos_on_physical_assembly_m, y_pos_holes_mod, marker='o', 
                                 color='orange', markersize=marker_size_scaled_m, 
                                 linestyle='None', alpha=0.6)
-                    
-                    total_length_mod = part_data_mod.get("Total length", 0.0)
-                    mortise_length_mod = part_data_mod.get("Mortise length", 0.0)
-                    if FLUTE_PARTS_ORDER.index(part_name_mod) < len(FLUTE_PARTS_ORDER) -1 :
-                        current_abs_pos_mod += (total_length_mod - mortise_length_mod)
 
                 plot_success = True
             except Exception as e: logger.error(f"Error plotting modified geometry from dict: {e}")
 
         if plot_success:
-            ax.set_title(f"Perfil Geométrico: {self.flute_name}", fontsize=10)
-            ax.set_xlabel("Posición (mm)"); ax.set_ylabel("Diámetro (mm)")
+            # El título y las etiquetas de los ejes ya se establecen dentro de plot_physical_assembly
+            # Si se llama varias veces, se sobrescribirán, lo cual está bien.
+            # ax.set_title(f"Ensamblaje Físico Estimado: {self.flute_name}", fontsize=10)
+            # ax.set_xlabel("Posición Absoluta Estimada (mm)"); ax.set_ylabel("Diámetro (mm)")
             ax.grid(True, linestyle=':', alpha=0.7)
-            if legend_handles: ax.legend(handles=legend_handles, loc='best', fontsize=9)
+            handles_all, labels_all = ax.get_legend_handles_labels()
+            by_label_all = dict(zip(labels_all, handles_all)) # Eliminar duplicados de leyenda
+            ax.legend(by_label_all.values(), by_label_all.keys(), loc='best', fontsize=9)
+            if overall_max_x_physical_all_flutes > 0:
+                ax.set_xlim(-10, overall_max_x_physical_all_flutes + 10)
         else:
             self._configure_plot_axes_placeholders(specific_ax=ax)
         self.canvas_geom.draw_idle()

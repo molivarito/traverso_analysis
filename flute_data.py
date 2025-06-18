@@ -773,6 +773,47 @@ class FluteData:
                     "source_part_name": part_name, "source_relative_position": pos_rel_part_mm
                 })
 
+            # --- Añadir el punto final acústico de la parte actual ---
+            part_acoustic_end_abs_val: float
+            part_acoustic_end_rel_pos_for_diam_lookup: float
+
+            if is_headjoint:
+                # El final acústico del Headjoint es donde se une el Left (antes del socket del Headjoint)
+                part_acoustic_end_abs_val = (part_physical_start_for_this_part_abs + part_total_length) - part_json_mortise_length
+                part_acoustic_end_rel_pos_for_diam_lookup = part_total_length - part_json_mortise_length
+            else: # Left, Right, Foot
+                # El final acústico es el final físico de la parte
+                part_acoustic_end_abs_val = part_physical_start_for_this_part_abs + part_total_length
+                part_acoustic_end_rel_pos_for_diam_lookup = part_total_length
+            
+            diam_at_part_acoustic_end = self._get_diameter_from_measurements_at_pos(
+                sorted_part_measurements, 
+                part_acoustic_end_rel_pos_for_diam_lookup
+            )
+
+            can_add_acoustic_end_point = True
+            if combined_measurements:
+                last_added_point = combined_measurements[-1]
+                # Si el último punto añadido es de la MISMA parte y en la MISMA posición
+                if last_added_point.get("source_part_name") == part_name and \
+                   abs(last_added_point["position"] - part_acoustic_end_abs_val) < 1e-6:
+                    if abs(last_added_point["diameter"] - diam_at_part_acoustic_end) > 1e-3: # Si el diámetro es diferente, actualizar
+                        logger.debug(f"Updating diameter at acoustic end of {part_name} (pos {part_acoustic_end_abs_val:.2f}mm) from {last_added_point['diameter']:.2f} to {diam_at_part_acoustic_end:.2f}mm.")
+                        last_added_point["diameter"] = diam_at_part_acoustic_end
+                    can_add_acoustic_end_point = False
+                # Si el punto final acústico haría retroceder el bore y el último punto es de la misma parte
+                elif part_acoustic_end_abs_val < last_added_point["position"] + 1e-6 and \
+                     last_added_point.get("source_part_name") == part_name:
+                    logger.debug(f"Skipping acoustic end for {part_name} at {part_acoustic_end_abs_val:.2f}mm; would recede from {last_added_point['position']:.2f}mm (same part).")
+                    can_add_acoustic_end_point = False
+            
+            if can_add_acoustic_end_point:
+                logger.debug(f"Adding acoustic end point for {part_name} at {part_acoustic_end_abs_val:.2f}mm, diameter {diam_at_part_acoustic_end:.2f}mm.")
+                combined_measurements.append({
+                    "position": part_acoustic_end_abs_val, "diameter": diam_at_part_acoustic_end,
+                    "source_part_name": part_name, "source_relative_position": part_acoustic_end_rel_pos_for_diam_lookup
+                })
+
             # Actualizar current_physical_connection_point_abs para la siguiente iteración.
             # Este es el punto donde la SIGUIENTE parte se unirá FÍSICAMENTE.
             if is_headjoint:
@@ -817,6 +858,45 @@ class FluteData:
         if not combined_measurements and any(self.data.values()):
             logger.warning(f"La lista de mediciones combinadas está vacía para {self.flute_model}, aunque hay datos de partes.")
         return combined_measurements
+
+    def _find_holes_outside_bore(self) -> str:
+        """
+        Identifica los agujeros que están posicionados fuera del tubo principal calculado
+        tal como se preparó para OpenWind.
+        Devuelve una cadena que detalla los agujeros problemáticos, o una cadena vacía si no se encuentran
+        o los datos son insuficientes.
+        """
+        try:
+            # Obtener las entradas de geometría tal como OpenWind las vería
+            bore_segments_m_radius, side_holes_for_openwind, _ = self.get_openwind_geometry_inputs()
+
+            if not bore_segments_m_radius:
+                return "Datos de segmentos del bore para OpenWind no disponibles."
+            if not side_holes_for_openwind or len(side_holes_for_openwind) <= 1: # Encabezado + datos
+                return "Datos de agujeros laterales para OpenWind no disponibles."
+
+            min_bore_pos_m = bore_segments_m_radius[0][0]  # Ya relativo al corcho
+            max_bore_pos_m = bore_segments_m_radius[-1][1] # Ya relativo al corcho
+            
+            problematic_holes = []
+            tolerance = 1e-6 # Pequeña tolerancia para comparaciones de punto flotante
+
+            for hole_entry in side_holes_for_openwind[1:]: # Saltar encabezado
+                hole_label = str(hole_entry[0])
+                # La posición en side_holes_for_openwind[1] ya es relativa al corcho
+                hole_pos_m_rel_cork = float(hole_entry[1]) 
+
+                if hole_pos_m_rel_cork < min_bore_pos_m - tolerance or \
+                   hole_pos_m_rel_cork > max_bore_pos_m + tolerance:
+                    problematic_holes.append(
+                        f"Agujero '{hole_label}' en {hole_pos_m_rel_cork*1000:.2f}mm (pos. OpenWind, rel. al corcho) "
+                        f"está fuera del rango del bore [{min_bore_pos_m*1000:.2f}mm, {max_bore_pos_m*1000:.2f}mm]."
+                    )
+            
+            return "; ".join(problematic_holes) if problematic_holes else "No se identificaron agujeros específicos fuera del bore mediante esta verificación."
+        except Exception as e_check:
+            logger.error(f"Error interno al verificar agujeros fuera del bore: {e_check}")
+            return "No se pudo completar la verificación de agujeros fuera del bore."
 
     def compute_acoustic_analysis(self, fing_chart_file: str, temperature: float) -> None:
         if self.validation_errors: 
@@ -871,9 +951,16 @@ class FluteData:
                     )
                     logger.info(f"Análisis acústico completado para nota {note} en {self.flute_model}")
                 except Exception as e_imp:
-                    logger.error(f"Error en ImpedanceComputation para nota '{note}' en {self.flute_model}. Datos de entrada: "
-                                 f"Geom (primeros 5): {geom_for_ic[:5]}, SideHoles (primeros 5): {side_holes_for_openwind[:5]}. Error: {e_imp}", exc_info=True)
-                    raise ValueError(f"Fallo en ImpedanceComputation para nota '{note}': {e_imp}") from e_imp
+                    error_msg_detail = str(e_imp)
+                    if "One hole is placed outside the main bore" in error_msg_detail:
+                        holes_info_str = self._find_holes_outside_bore()
+                        if holes_info_str and "No se identificaron" not in holes_info_str and "no disponibles" not in holes_info_str:
+                            error_msg_detail += f"\n  Detalle de agujero(s) problemático(s): {holes_info_str}"
+                        else:
+                            error_msg_detail += f"\n  (Verificación automática de agujeros: {holes_info_str})"
+                    
+                    logger.error(f"Error en ImpedanceComputation para nota '{note}' en {self.flute_model}. {error_msg_detail}", exc_info=True)
+                    raise ValueError(f"Fallo en ImpedanceComputation para nota '{note}': {error_msg_detail}") from e_imp
         except Exception as e_main:
             logger.exception(f"Error mayor en compute_acoustic_analysis para {self.flute_model}: {e_main}")
             self.acoustic_analysis = {} 

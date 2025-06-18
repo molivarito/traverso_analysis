@@ -26,7 +26,7 @@ class GraphicalFluteEditor(tk.Toplevel):
     def __init__(self, master: tk.Tk, initial_data: Dict[str, Any], flute_name: str, apply_callback: Callable[[Dict[str, Any]], None]):
         super().__init__(master)
         self.title(f"Edit Geometry: {flute_name}")
-        self.geometry("1000x700") # Ajustar tamaño según necesidad
+        self.geometry("1000x800") # Aumentar altura a 800
 
         self.initial_data = copy.deepcopy(initial_data)
         self.current_data = copy.deepcopy(initial_data)

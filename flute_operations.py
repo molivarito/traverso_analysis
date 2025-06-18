@@ -260,7 +260,10 @@ class FluteOperations:
                     # Marcador rojo: Fin de Right (fin de su cuerpo y tenon) / Inicio Socket Foot
                     ax.vlines(part_body_abs_end - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6)
                     
-                    current_abs_offset = part_body_abs_end # El offset para 'foot' es el final físico de 'right'
+                    # Revertir a la lógica original: El offset para 'foot' es el final físico de 'right'.
+                    # part_body_abs_end ya es (part_abs_start_attach_point + part_total_length)
+                    current_abs_offset = part_body_abs_end
+
 
                 elif part_name == FLUTE_PARTS_ORDER[3]: # Foot (tiene socket al inicio)
                     part_abs_start_attach_point = current_abs_offset
@@ -293,6 +296,8 @@ class FluteOperations:
         # next_part_connection_point_abs: dónde se conectará la siguiente parte (final acústico de la actual).
         next_part_connection_point_abs = 0.0
         overall_max_x_physical = 0.0
+        main_flute_label_applied = False
+        headjoint_data_for_stopper = self.flute_data.data.get(FLUTE_PARTS_ORDER[0], {})
 
         physical_plots_made = 0
         for i, part_name in enumerate(FLUTE_PARTS_ORDER):
@@ -328,23 +333,29 @@ class FluteOperations:
             part_plot_diameters = [m['diameter'] for m in measurements]
 
             color = BASE_COLORS[i % len(BASE_COLORS)]
-            label_part = f"{part_name} ({plot_label_suffix})" if plot_label_suffix else part_name
+            
+            # Aplicar la etiqueta principal solo a la primera parte de la flauta
+            current_part_plot_label = None
+            if not main_flute_label_applied and plot_label_suffix:
+                current_part_plot_label = plot_label_suffix
+                main_flute_label_applied = True
+            
             linestyle_part = overall_linestyle if overall_linestyle else '-'
             
-            ax.plot(part_plot_positions, part_plot_diameters, label=label_part, color=color, linestyle=linestyle_part, alpha=0.7, zorder=i*2)
+            ax.plot(part_plot_positions, part_plot_diameters, label=current_part_plot_label, color=color, linestyle=linestyle_part, alpha=0.7, zorder=i*2)
 
             # Resaltar la región del socket de esta parte (si lo tiene y es relevante)
             if part_name == FLUTE_PARTS_ORDER[0]: # Headjoint (socket al final)
                 socket_start_abs = current_physical_plot_start_abs + part_total_length - part_json_mortise_length
                 socket_end_abs = current_physical_plot_start_abs + part_total_length
-                ax.axvspan(socket_start_abs, socket_end_abs, alpha=0.2, color=color, label=f"{label_part} socket", zorder=i*2-1)
+                ax.axvspan(socket_start_abs, socket_end_abs, alpha=0.2, color=color, label=None, zorder=i*2-1)
                 next_part_connection_point_abs = socket_start_abs # Left se conecta al inicio del socket de HJ
             elif part_name == FLUTE_PARTS_ORDER[1]: # Left (no tiene socket propio que afecte el ensamblaje así)
                 next_part_connection_point_abs = current_physical_plot_start_abs + part_total_length # Right se conecta al final de Left
             else: # Right, Foot (socket al inicio)
                 socket_start_abs = current_physical_plot_start_abs
                 socket_end_abs = current_physical_plot_start_abs + part_json_mortise_length
-                ax.axvspan(socket_start_abs, socket_end_abs, alpha=0.2, color=color, label=f"{label_part} socket", zorder=i*2-1)
+                ax.axvspan(socket_start_abs, socket_end_abs, alpha=0.2, color=color, label=None, zorder=i*2-1)
                 if part_name == FLUTE_PARTS_ORDER[2]: # Right
                      next_part_connection_point_abs = current_physical_plot_start_abs + part_total_length # Foot se conecta al final de Right
             
@@ -357,6 +368,16 @@ class FluteOperations:
             logger.debug(f"  Part '{part_name}': Plotted physical data. Number of measurement points: {len(measurements)}")
             physical_plots_made +=1
         logger.debug(f"Total physical part plots made: {physical_plots_made}")
+
+        # Añadir marcador de corcho después de dibujar todas las partes de esta flauta
+        stopper_pos_mm = headjoint_data_for_stopper.get('_calculated_stopper_absolute_position_mm')
+        if stopper_pos_mm is not None:
+            min_diam_marker, max_diam_marker = ax.get_ylim()
+            # Usar una fracción del rango y para la altura del marcador, similar a plot_combined_flute_data
+            marker_y_bottom = min_diam_marker + 0.05 * (max_diam_marker - min_diam_marker)
+            marker_y_top = max_diam_marker - 0.05 * (max_diam_marker - min_diam_marker)
+            ax.vlines(stopper_pos_mm, marker_y_bottom, marker_y_top, 
+                      colors='purple', linestyles='dashdot', alpha=0.8, label='_nolegend_') # No añadir a la leyenda principal
 
         # La leyenda y xlim se manejan en la GUI para el consolidado
         return overall_max_x_physical
@@ -838,13 +859,13 @@ class FluteOperations:
         num_flutes = len(acoustic_analysis_list)
         offset_per_flute = 0.12
         base_x_positions = np.arange(len(notes_ordered))
-
+ 
         legend_handles = [] 
         for index, (analysis_dict, flute_name) in enumerate(acoustic_analysis_list):
             linestyle = linestyles[index % len(linestyles)]
             color = base_colors[index % len(base_colors)]
             cents_diffs = []
-            current_x_offset = (index - (num_flutes - 1) / 2.0) * offset_per_flute
+            current_x_offset = 0.0 # No offset entre flautas
             for note in notes_ordered:
                 note_cents = np.nan
                 analysis_obj = analysis_dict.get(note)
@@ -884,14 +905,14 @@ class FluteOperations:
         num_flutes = len(acoustic_analysis_list)
         offset_per_flute = 0.12
         base_x_positions = np.arange(len(notes_ordered))
-
+ 
         legend_handles = [] 
         for index, (analysis_dict, flute_name) in enumerate(acoustic_analysis_list):
             linestyle = linestyles[index % len(linestyles)]
             color = base_colors[index % len(base_colors)]
             moc_vals = []
             current_finger_freqs = finger_frequencies_map.get(flute_name, {})
-            current_x_offset = (index - (num_flutes - 1) / 2.0) * offset_per_flute
+            current_x_offset = 0.0 # No offset entre flautas
             for note in notes_ordered:
                 moc = np.nan
                 f_play = current_finger_freqs.get(note)
@@ -932,8 +953,8 @@ class FluteOperations:
 
         num_flutes = len(acoustic_analysis_list)
         base_x_positions = np.arange(len(notes_ordered))
-        total_width_per_flute_group = 0.3
-        inter_flute_spacing_factor = 0.15 
+        # total_width_per_flute_group ahora se usa para separar BI de ESPE para la misma flauta
+        width_for_bi_espe_separation = 0.15 # Ancho para separar BI y ESPE de la misma flauta
 
         def get_speed_of_sound(temp_celsius=20.0): return 331.3 * np.sqrt(1 + temp_celsius / 273.15)
         speed_of_sound_ref = get_speed_of_sound(20.0)
@@ -960,10 +981,11 @@ class FluteOperations:
                         if L_eff_I > 0 and (L_eff_I + delta_delta_l) > 1e-9: 
                             espe = 1200.0 * np.log2(L_eff_I / (L_eff_I + delta_delta_l))
                 bi_vals.append(bi); espe_vals.append(espe)
-            group_center_offset = (idx - (num_flutes - 1) / 2.0) * (total_width_per_flute_group * (1 + inter_flute_spacing_factor))
-            line_bi, = ax.plot(base_x_positions + group_center_offset - total_width_per_flute_group/4, bi_vals,
+            # group_center_offset es 0 para alinear todas las flautas
+            # Se mantiene una pequeña separación entre BI y ESPE para la misma flauta
+            line_bi, = ax.plot(base_x_positions - width_for_bi_espe_separation / 2, bi_vals,
                     linestyle='-', color=color, marker='o', markersize=5, alpha=0.8)
-            line_espe, = ax.plot(base_x_positions + group_center_offset + total_width_per_flute_group/4, espe_vals,
+            line_espe, = ax.plot(base_x_positions + width_for_bi_espe_separation / 2, espe_vals,
                     linestyle='--', dashes=(4,2), color=color, marker='x', markersize=5, alpha=0.8) 
             if f"{flute_name} - $B_I$" not in legend_items:
                 legend_items[f"{flute_name} - $B_I$"] = line_bi
