@@ -889,6 +889,70 @@ class FluteOperations:
         return fig
 
     @staticmethod
+    def plot_single_flute_inharmonicity_comparison(
+            initial_analysis_dict: Dict[str, ImpedanceComputation],
+            optimized_analysis_dict: Dict[str, ImpedanceComputation],
+            notes_ordered: List[str],
+            flute_name: str,
+            ax: Optional[plt.Axes] = None,
+        ) -> plt.Figure:
+        """
+        Compara la inharmonicidad (cents: Pico 2 vs 2*Pico 1) antes y después de la optimización
+        para una sola flauta.
+        """
+        fig: plt.Figure
+        if ax is None: fig, ax = plt.subplots(figsize=(10, 6))
+        else: fig = ax.figure; ax.clear()
+
+        base_x_positions = np.arange(len(notes_ordered))
+
+        def calculate_cents_diffs(analysis_dict_param: Dict[str, Any], notes: List[str], label_for_log: str) -> List[float]: # Modificado tipo y añadido label
+            cents_diffs = []
+            logger.debug(f"CHECKPOINT FluteOperations: Calculando cents_diffs para '{label_for_log}'")
+            if not analysis_dict_param:
+                logger.warning(f"CHECKPOINT FluteOperations: analysis_dict_param para '{label_for_log}' está vacío o es None.")
+                return [np.nan] * len(notes)
+            
+            for note_log in notes: # Renombrado para evitar conflicto con variable externa 'note'
+                note_cents = np.nan
+                analysis_obj = analysis_dict_param.get(note_log)
+                logger.debug(f"  Nota '{note_log}' ({label_for_log}): analysis_obj es de tipo {type(analysis_obj).__name__}")
+
+                if isinstance(analysis_obj, ImpedanceComputation):
+                    logger.debug(f"    Nota '{note_log}' ({label_for_log}): Es ImpedanceComputation.")
+                    antires_freqs = list(analysis_obj.antiresonance_frequencies())
+                    logger.debug(f"    Nota '{note_log}' ({label_for_log}): Antirresonancias: {antires_freqs[:3]}")
+                    if len(antires_freqs) >= 2:
+                        f1, f2 = antires_freqs[0], antires_freqs[1]
+                        if f1 > 0 and f2 > 0:
+                            note_cents = 1200 * np.log2(f2 / (2.0 * f1))
+                            logger.debug(f"    Nota '{note_log}' ({label_for_log}): f1={f1:.2f}, f2={f2:.2f}, note_cents={note_cents:.2f}")
+                        else:
+                            logger.warning(f"    Nota '{note_log}' ({label_for_log}): Frecuencias de antirresonancia no positivas f1={f1}, f2={f2}")
+                    else:
+                        logger.warning(f"    Nota '{note_log}' ({label_for_log}): No hay suficientes antirresonancias ({len(antires_freqs)})")
+                elif analysis_obj is None:
+                    logger.warning(f"    Nota '{note_log}' ({label_for_log}): analysis_obj es None.")
+                else:
+                    logger.warning(f"    Nota '{note_log}' ({label_for_log}): NO es ImpedanceComputation (tipo: {type(analysis_obj).__name__}).")
+                cents_diffs.append(note_cents)
+            return cents_diffs
+
+        cents_diffs_initial = calculate_cents_diffs(initial_analysis_dict, notes_ordered, "Inicial")
+        cents_diffs_optimized = calculate_cents_diffs(optimized_analysis_dict, notes_ordered, "Optimizado")
+        logger.debug(f"CHECKPOINT FluteOperations: Cents diffs calculados. Inicial: {cents_diffs_initial}, Optimizado: {cents_diffs_optimized}")
+
+        ax.plot(base_x_positions, cents_diffs_initial, marker="o", linestyle='--', color='gray', label="Inicial", markersize=5, alpha=0.8)
+        ax.plot(base_x_positions, cents_diffs_optimized, marker="o", linestyle='-', color='blue', label="Optimizado", markersize=5, alpha=0.8)
+
+        ax.set_xticks(base_x_positions); ax.set_xticklabels(notes_ordered, rotation=45, ha="right")
+        ax.axhline(0, color='grey', linestyle='--', lw=0.8); ax.set_title(f"Inharmonicidad (Cents) - {flute_name}", fontsize=10)
+        ax.set_xlabel("Nota"); ax.set_ylabel("Diferencia (cents)"); ax.grid(True, linestyle=':', alpha=0.7); 
+        if any(not np.isnan(c) for c in cents_diffs_initial) or any(not np.isnan(c) for c in cents_diffs_optimized):
+            ax.legend(loc='best', fontsize=9)
+        fig.tight_layout(); return fig
+
+    @staticmethod
     def plot_moc_summary(
             acoustic_analysis_list: List[Tuple[Dict[str, ImpedanceComputation], str]],
             finger_frequencies_map: Dict[str, Dict[str, float]],

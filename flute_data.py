@@ -184,17 +184,20 @@ class FluteData:
                 r_end_m = (p2["diameter"] / 2.0) / 1000.0
                 # Si el segmento tiene longitud cero o negativa, no lo añadas y registra un error.
                 # OpenWind no puede manejar esto.
-                if x_end_m <= x_start_m + 1e-7: # Usar una tolerancia pequeña
-                    error_detail = (
-                        f"Segmento de tubo retrocede o tiene longitud cero/negativa entre puntos combinados:\n"
-                        f"  Punto A: AbsPos={p1['position']:.2f}mm (Origen: {p1.get('source_part_name','N/A')}, PosRel={p1.get('source_relative_position','N/A')}mm) -> NormPos={x_start_m:.4f}m\n"
-                        f"  Punto B: AbsPos={p2['position']:.2f}mm (Origen: {p2.get('source_part_name','N/A')}, PosRel={p2.get('source_relative_position','N/A')}mm) -> NormPos={x_end_m:.4f}m\n"
-                        f"Causa probable: 'Mortise length' incorrectos, mediciones desordenadas o superposición de partes."
-                    )
-                    # No añadir a self.validation_errors para este caso específico,
-                    # ya que compute_acoustic_analysis lo trataría como fatal.
-                    # El logger.error es suficiente. OpenWind fallará si la geometría es inutilizable.
-                    logger.error(f"Error de geometría para {self.flute_model}: {error_detail}")
+                if x_end_m <= x_start_m + 1e-7: # Usar una tolerancia pequeña para puntos coincidentes
+                    # Esto ocurre en las uniones de partes donde hay un cambio de diámetro.
+                    # combined_measurements tiene dos puntos en la misma 'x' para representar el escalón.
+                    # Para OpenWind, esto no es un segmento propagante, sino el final de un segmento
+                    # y el inicio de otro con un nuevo diámetro. Simplemente no creamos un segmento de longitud cero.
+                    # El siguiente segmento válido comenzará desde p2.
+                    if p1.get('source_part_name') != p2.get('source_part_name'):
+                        logger.debug(f"Geometría para {self.flute_model}: Punto de unión con salto de diámetro en x={x_start_m:.4f}m. "
+                                    f"p1(src:{p1.get('source_part_name')},d:{p1['diameter']}), "
+                                    f"p2(src:{p2.get('source_part_name')},d:{p2['diameter']}). "
+                                    "No se crea segmento de longitud cero.")
+                    else: # Misma parte, misma posición - esto sí es un error de datos o lógica previa
+                        logger.error(f"Error de geometría para {self.flute_model}: Segmento de longitud cero/negativo DENTRO de la misma parte '{p1.get('source_part_name')}': "
+                                     f"X=[{x_start_m:.4f}m -> {x_end_m:.4f}m]")
                 else: # Segmento válido
                     bore_segments_m_radius.append([x_start_m, x_end_m, r_start_m, r_end_m, 'linear'])
                     logger.debug(f"  Bore segment: X=[{x_start_m:.4f}, {x_end_m:.4f}], R=[{r_start_m:.5f}, {r_end_m:.5f}]")

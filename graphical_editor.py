@@ -312,6 +312,7 @@ class GraphicalFluteEditor(tk.Toplevel):
         if isinstance(hole_positions_rel_mm, list) and isinstance(hole_diameters_mm, list):
             for hole_idx_in_part, rel_pos_mm in enumerate(hole_positions_rel_mm):
                 if hole_idx_in_part >= len(hole_diameters_mm): break
+
                 hole_diam_mm = hole_diameters_mm[hole_idx_in_part]
                 
                 # Plot hole as a marker
@@ -320,6 +321,7 @@ class GraphicalFluteEditor(tk.Toplevel):
                 hole_marker, = self.ax_plot.plot(rel_pos_mm, self._min_hole_marker_y_reference, 'o',
                                                  color='darkgreen', markersize=marker_size_scaled, picker=5, alpha=0.7, zorder=12)
                 self.hole_artist_info.append({'artist': hole_marker, 'part_name': part_name, 'hole_index_in_part': hole_idx_in_part})
+
 
         self.ax_plot.set_title(f"Geometry: {part_name.capitalize()} - {self.flute_name}", fontsize=10)
         self.ax_plot.set_xlabel(f"Position in {part_name.capitalize()} (mm)")

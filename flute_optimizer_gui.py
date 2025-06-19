@@ -20,7 +20,7 @@ from typing import Optional, Dict, Any
 # Intentar importar módulos principales primero
 try:
     from optimize_flute_from_json import optimize_flute_from_json_full, plot_optimized_admittances
-    from openwind import InstrumentPhysics, InstrumentGeometry
+    from openwind import InstrumentPhysics, InstrumentGeometry, ImpedanceComputation # Importar ImpedanceComputation
     from constants import MM_TO_M_FACTOR as MM_TO_M_FACTOR_CONST, M_TO_MM_FACTOR as M_TO_MM_FACTOR_CONST
     from flute_data import FluteData, FluteDataInitializationError # <--- AÑADIDO
     from flute_operations import FluteOperations # Para plot_shape_static y plot_holes_static
@@ -66,6 +66,68 @@ if not DEFAULT_DATA_JSON_DIR.exists():
     DEFAULT_DATA_JSON_DIR = SCRIPT_DIR / "data_json"
 
 
+class TraditionalTextEditor(tk.Toplevel): # Definición de la clase que faltaba
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.title("Editor JSON Tradicional")
+        self.geometry("800x600")
+        self.filename = None
+        self.create_widgets()
+
+    def create_widgets(self):
+        toolbar = ttk.Frame(self)
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+        # btn_open = ttk.Button(toolbar, text="Abrir", command=self.open_file) # No necesario si se carga externamente
+        # btn_open.pack(side=tk.LEFT, padx=2, pady=2)
+        btn_save = ttk.Button(toolbar, text="Guardar y Cerrar", command=self.save_and_close)
+        btn_save.pack(side=tk.LEFT, padx=5, pady=2)
+        btn_cancel = ttk.Button(toolbar, text="Cancelar", command=self.cancel_edit)
+        btn_cancel.pack(side=tk.LEFT, padx=5, pady=2)
+        # btn_save_as = ttk.Button(toolbar, text="Guardar Como", command=self.save_as) # No necesario
+        # btn_save_as.pack(side=tk.LEFT, padx=2, pady=2)
+        # btn_close_file = ttk.Button(toolbar, text="Cerrar Archivo", command=self.close_file) # No necesario
+        # btn_close_file.pack(side=tk.LEFT, padx=2, pady=2)
+        # btn_exit = ttk.Button(toolbar, text="Salir Editor", command=self.exit_editor) # No necesario
+        # btn_exit.pack(side=tk.LEFT, padx=2, pady=2)
+
+        self.text_area = tk.Text(self, wrap=tk.WORD, undo=True) # Renombrado de self.text a self.text_area
+        self.text_area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        vsb = ttk.Scrollbar(self, orient="vertical", command=self.text_area.yview)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.text_area.configure(yscrollcommand=vsb.set)
+
+        hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text_area.xview)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.text_area.configure(xscrollcommand=hsb.set)
+
+    def load_file_content(self, filepath: str): # Método para cargar contenido
+        self.filename = filepath
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.text_area.delete("1.0", tk.END)
+            self.text_area.insert(tk.END, content)
+            self.title(f"Editando - {Path(filepath).name}")
+        except Exception as e:
+            messagebox.showerror("Error Abriendo Archivo", f"No se pudo cargar el archivo para editar:\n{e}", parent=self)
+            self.destroy()
+
+    def save_and_close(self): # Guardar y cerrar
+        if self.filename:
+            try:
+                with open(self.filename, "w", encoding="utf-8") as f:
+                    f.write(self.text_area.get("1.0", tk.END).strip() + "\n")
+                logger.info(f"Archivo guardado: {self.filename}")
+            except Exception as e:
+                messagebox.showerror("Error Guardando", f"No se pudo guardar el archivo:\n{e}", parent=self)
+                return # No cerrar si falla el guardado
+        self.destroy()
+
+    def cancel_edit(self): # Cancelar y cerrar
+        self.destroy()
+
+
 class FluteOptimizerApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -78,8 +140,10 @@ class FluteOptimizerApp(tk.Tk):
         self.optimized_chimney_heights: Optional[dict] = None
         self.initial_admittance_data_per_note: Optional[dict] = None
         self.optimized_admittance_data_per_note: Optional[dict] = None
-        self.physics_states_per_note: Optional[Dict[str, InstrumentPhysics]] = None # Solo para geometría
+        # self.physics_states_per_note: Optional[Dict[str, InstrumentPhysics]] = None # Ya no se usa directamente para el análisis optimizado
         self.pressure_flow_data_per_note: Optional[Dict[str, Dict[str, Any]]] = None # Para datos precalculados
+        self.initial_acoustic_analysis_data: Optional[Dict[str, Any]] = None # Para guardar el análisis inicial
+        self.optimized_acoustic_analysis_data: Optional[Dict[str, ImpedanceComputation]] = None # Ahora almacena ImpedanceComputation optimizados
         self.optimized_notes_list: Optional[list] = None
         self.target_frequencies_map: Optional[dict] = None
 
@@ -176,7 +240,12 @@ class FluteOptimizerApp(tk.Tk):
         self.ow_admittance_summary_plot_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.ow_admittance_summary_canvas_agg: Optional[FigureCanvasTkAgg] = None
 
-        # Pestaña para Geometría Detallada OpenWind (con su propio selector de nota)
+        # Pestaña para Comparación de Inharmonicidad
+        self.inharmonicity_comparison_frame = ttk.Frame(self.results_notebook)
+        self.results_notebook.add(self.inharmonicity_comparison_frame, text="Inharmonicidad (Antes/Después)")
+        self.inharmonicity_canvas_agg: Optional[FigureCanvasTkAgg] = None
+
+        # Pestaña para Geometría Detallada OpenWind (con su propio selector de nota) - Mantenida si es necesaria
         self.ow_detailed_geometry_tab_frame = ttk.Frame(self.results_notebook)
         self.results_notebook.add(self.ow_detailed_geometry_tab_frame, text="Geometría Detallada OW (Nota)")
 
@@ -213,8 +282,10 @@ class FluteOptimizerApp(tk.Tk):
             self.optimized_chimney_heights = None
             self.initial_admittance_data_per_note = None
             self.optimized_admittance_data_per_note = None
-            self.physics_states_per_note = None
+            # self.physics_states_per_note = None # Comentado
             self.pressure_flow_data_per_note = None
+            self.initial_acoustic_analysis_data = None
+            self.optimized_acoustic_analysis_data = None
             self.optimized_notes_list = None
             self._clear_all_plot_canvases()
 
@@ -232,8 +303,10 @@ class FluteOptimizerApp(tk.Tk):
         self.optimized_chimney_heights = None
         self.initial_admittance_data_per_note = None
         self.optimized_admittance_data_per_note = None
-        self.physics_states_per_note = None
+        # self.physics_states_per_note = None # Comentado
         self.pressure_flow_data_per_note = None
+        self.initial_acoustic_analysis_data = None
+        self.optimized_acoustic_analysis_data = None
         self.optimized_notes_list = None
         self._clear_all_plot_canvases()
         
@@ -245,18 +318,12 @@ class FluteOptimizerApp(tk.Tk):
         while True: # Bucle para reintentar después de editar
             try:
                 logger.info(f"Optimizador: Intentando cargar FluteData desde: {data_path_for_optim}")
-                # FluteData se encarga de leer los JSONs y la validación inicial.
-                # Para la optimización, necesitamos el análisis acústico, así que skip_acoustic_analysis=False (o no se pasa)
-                # Sin embargo, para la validación inicial antes de la optimización, podríamos saltarlo
-                # y luego re-instanciar o llamar a compute_acoustic_analysis si la geometría es válida.
-                # Por simplicidad aquí, intentaremos una carga completa, y si falla por geometría
-                # antes del análisis, se ofrecerá editar.
                 current_flute_data_attempt = FluteData(
                     str(data_path_for_optim),
                     source_name=flute_dir_name_for_optim,
                     la_frequency=diapason_val,
                     temperature=temp_val,
-                    skip_acoustic_analysis=False # Queremos el análisis para la optimización
+                    skip_acoustic_analysis=False 
                 )
 
                 if not current_flute_data_attempt.validation_errors:
@@ -264,7 +331,7 @@ class FluteOptimizerApp(tk.Tk):
                         warning_messages = "\n".join([w.get('message', 'Advertencia desconocida.') for w in current_flute_data_attempt.validation_warnings])
                         messagebox.showwarning("Advertencias de Validación", f"Advertencias para '{flute_dir_name_for_optim}':\n{warning_messages}", parent=self)
                     flute_data_obj_for_optim = current_flute_data_attempt
-                    break # Carga exitosa
+                    break 
 
                 error_info = current_flute_data_attempt.validation_errors[0]
                 error_message = error_info.get('message', 'Error desconocido.')
@@ -278,16 +345,16 @@ class FluteOptimizerApp(tk.Tk):
                 if file_to_edit_path_obj and file_to_edit_path_obj.exists():
                     prompt_message += f"¿Desea editar el archivo '{file_to_edit_path_obj.name}' para corregirlo?"
                     user_choice = messagebox.askyesnocancel("Error de Datos JSON", prompt_message, parent=self, icon=messagebox.ERROR)
-                    if user_choice is True: # Sí, editar
-                        editor = TraditionalTextEditor(self) # Usar la clase definida en este archivo
-                        editor.load_file_content(str(file_to_edit_path_obj)) # Asumir que editor tiene este método
+                    if user_choice is True: 
+                        editor = TraditionalTextEditor(self) 
+                        editor.load_file_content(str(file_to_edit_path_obj)) 
                         self.wait_window(editor)
-                        continue # Reintentar carga
-                    elif user_choice is False: # No, no editar
+                        continue 
+                    elif user_choice is False: 
                         flute_data_obj_for_optim = None; break 
-                    else: # Cancelar
+                    else: 
                         self.results_text.config(state=tk.NORMAL); self.results_text.insert(tk.END, "Optimización cancelada por el usuario.\n"); self.results_text.config(state=tk.DISABLED); return
-                else: # Error general o archivo no identificable
+                else: 
                     messagebox.showerror("Error de Datos JSON", prompt_message, parent=self)
                     flute_data_obj_for_optim = None; break
             except (FluteDataInitializationError, Exception) as e_load_fd:
@@ -306,22 +373,31 @@ class FluteOptimizerApp(tk.Tk):
         try:
             self.optimized_chimney_heights, self.initial_admittance_data_per_note, \
             self.optimized_admittance_data_per_note, model_name, self.target_frequencies_map, diapason_used, \
-            self.physics_states_per_note, self.pressure_flow_data_per_note, self.optimized_notes_list = \
-                optimize_flute_from_json_full(
-                    flute_data_instance=flute_data_obj_for_optim, # Pasar la instancia cargada
+            self.optimized_acoustic_analysis_data, self.pressure_flow_data_per_note, self.optimized_notes_list, \
+            self.initial_acoustic_analysis_data = \
+                optimize_flute_from_json_full( 
+                    flute_data_instance=flute_data_obj_for_optim, 
                     diapason_a4_hz_gui=diapason_val,
                     target_temp_c_gui=temp_val
                 )
+            logger.debug(f"CHECKPOINT GUI: Después de optimize_flute_from_json_full.")
+            logger.debug(f"  self.initial_acoustic_analysis_data: {{k: type(v).__name__ for k, v in self.initial_acoustic_analysis_data.items() if self.initial_acoustic_analysis_data}}")
+            logger.debug(f"  self.optimized_acoustic_analysis_data: {{k: type(v).__name__ for k, v in self.optimized_acoustic_analysis_data.items() if self.optimized_acoustic_analysis_data}}")
+            logger.debug(f"  self.optimized_notes_list: {self.optimized_notes_list}")
+
 
             self.results_text.insert(tk.END, "--- Alturas de Chimenea Optimizadas (mm) ---\n")
             if self.optimized_chimney_heights:
                 for note, height in self.optimized_chimney_heights.items():
-                    status = f"{height:.3f} mm" if not isinstance(height, float) or not plt.np.isnan(height) else "Error en optimización"
+                    status = f"{height:.3f} mm" if not isinstance(height, float) or not np.isnan(height) else "Error en optimización"
                     self.results_text.insert(tk.END, f"  {note}: {status}\n")
                 self._plot_chimney_heights_summary()
             else:
                 self.results_text.insert(tk.END, "No se obtuvieron resultados de optimización.\n")
 
+            # El bloque que construía self.optimized_acoustic_analysis_data a partir de self.physics_states_per_note se elimina
+            # porque ahora se recibe directamente de optimize_flute_from_json_full.
+            self._update_inharmonicity_plot() 
             self.results_text.insert(tk.END, "\nOptimización completada.\n")
 
             if self.optimized_notes_list:
@@ -333,21 +409,16 @@ class FluteOptimizerApp(tk.Tk):
 
                 if self.optimized_notes_list:
                     self.detailed_note_var.set(self.optimized_notes_list[0])
-                    self._update_detailed_plots_for_selected_note(event=None)
-
-                    # Establecer y actualizar la pestaña de geometría detallada OW
+                    self._update_detailed_plots_for_selected_note(event=None) # Esto actualizará Admitancia y P/F
                     self.ow_detailed_geometry_note_var.set(self.optimized_notes_list[0])
                     self._update_ow_detailed_geometry_plot(event=None)
 
                 if self.optimized_admittance_data_per_note and self.flute_name and self.target_frequencies_map:
                     self._plot_openwind_admittance_summary()
-
             else:
                 self.admittance_note_combobox['values'] = []
-                if hasattr(self, 'geom_modes_note_combobox'):
-                    self.geom_modes_note_combobox['values'] = []
-                if hasattr(self, 'ow_detailed_geometry_note_combobox'):
-                    self.ow_detailed_geometry_note_combobox['values'] = []
+                if hasattr(self, 'geom_modes_note_combobox'): self.geom_modes_note_combobox['values'] = []
+                if hasattr(self, 'ow_detailed_geometry_note_combobox'): self.ow_detailed_geometry_note_combobox['values'] = []
                 self.detailed_note_var.set("")
         except FileNotFoundError as e_fnf:
             logger.error(f"Error de archivo durante la optimización: {e_fnf}", exc_info=True)
@@ -374,12 +445,11 @@ class FluteOptimizerApp(tk.Tk):
         self._clear_plot_canvas(self.detailed_pressure_flow_plot_frame, "pf_canvas_agg")
         self._clear_plot_canvas(self.detailed_geometry_plot_frame, "geom_canvas_agg")
         self._clear_plot_canvas(self.ow_admittance_summary_plot_frame, "ow_admittance_summary_canvas_agg")
+        self._clear_plot_canvas(self.inharmonicity_comparison_frame, "inharmonicity_canvas_agg") 
         self._clear_plot_canvas(self.ow_detailed_geometry_plot_frame, "ow_detailed_geometry_canvas_agg")
         self.admittance_note_combobox['values'] = []
-        if hasattr(self, 'geom_modes_note_combobox'):
-            self.geom_modes_note_combobox['values'] = []
-        if hasattr(self, 'ow_detailed_geometry_note_combobox'):
-            self.ow_detailed_geometry_note_combobox['values'] = []
+        if hasattr(self, 'geom_modes_note_combobox'): self.geom_modes_note_combobox['values'] = []
+        if hasattr(self, 'ow_detailed_geometry_note_combobox'): self.ow_detailed_geometry_note_combobox['values'] = []
         self.detailed_note_var.set("")
 
     def _plot_chimney_heights_summary(self):
@@ -400,265 +470,200 @@ class FluteOptimizerApp(tk.Tk):
         self.chimney_canvas_agg.draw()
         self.chimney_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-    def _update_detailed_plots_for_selected_note(self, event: Optional[tk.Event]):
-        # Esta función ahora actualiza: Admitancia, Geometría Simplificada y Modos P/F.
-        # La Geometría Detallada OW tiene su propio callback.
-        selected_note = self.detailed_note_var.get()
-        if not selected_note or not self.physics_states_per_note or not self.optimized_admittance_data_per_note or \
-           not self.target_frequencies_map or not self.pressure_flow_data_per_note:
-            self._clear_plot_canvas(self.admittance_plot_canvas_frame, "admittance_canvas_agg")
-            self._clear_plot_canvas(self.detailed_pressure_flow_plot_frame, "pf_canvas_agg") # Limpiar P/F
-            self._clear_plot_canvas(self.detailed_geometry_plot_frame, "geom_canvas_agg") # Limpiar Geom Simplificada
+    def _update_inharmonicity_plot(self):
+        self._clear_plot_canvas(self.inharmonicity_comparison_frame, "inharmonicity_canvas_agg")
+        if not self.initial_acoustic_analysis_data or not self.optimized_acoustic_analysis_data or \
+           not self.optimized_notes_list or not self.flute_name: 
+            logger.warning("Datos insuficientes para plotear la inharmonicidad.")
+            error_label = ttk.Label(self.inharmonicity_comparison_frame, text="No hay datos de inharmonicidad para mostrar.")
+            error_label.pack(padx=10, pady=10, anchor="center")
             return
 
-        # --- Actualizar Gráfico de Admitancia ---
+        try:
+            fig_inharm = FluteOperations.plot_single_flute_inharmonicity_comparison(
+                self.initial_acoustic_analysis_data, 
+                self.optimized_acoustic_analysis_data, 
+                self.optimized_notes_list, 
+                self.flute_name 
+            )
+            if fig_inharm:
+                self.inharmonicity_canvas_agg = FigureCanvasTkAgg(fig_inharm, master=self.inharmonicity_comparison_frame)
+                self.inharmonicity_canvas_agg.draw()
+                self.inharmonicity_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            else:
+                logger.error("plot_single_flute_inharmonicity_comparison no devolvió una figura válida.")
+                error_label = ttk.Label(self.inharmonicity_comparison_frame, text="Error al generar el gráfico de inharmonicidad.")
+                error_label.pack(padx=10, pady=10, anchor="center")
+        except Exception as e_inharm_plot:
+            logger.error(f"Error al plotear la inharmonicidad: {e_inharm_plot}", exc_info=True)
+            error_label = ttk.Label(self.inharmonicity_comparison_frame, text=f"Error al plotear la inharmonicidad:\n{e_inharm_plot}")
+            error_label.pack(padx=10, pady=10, anchor="center")
+
+    def _update_detailed_plots_for_selected_note(self, event: Optional[tk.Event]):
+        selected_note = self.detailed_note_var.get()
+        if not selected_note or not self.optimized_acoustic_analysis_data or not self.optimized_admittance_data_per_note or \
+           not self.target_frequencies_map or not self.pressure_flow_data_per_note:
+            self._clear_plot_canvas(self.admittance_plot_canvas_frame, "admittance_canvas_agg")
+            self._clear_plot_canvas(self.detailed_pressure_flow_plot_frame, "pf_canvas_agg") 
+            self._clear_plot_canvas(self.detailed_geometry_plot_frame, "geom_canvas_agg") 
+            return
+
         self._clear_plot_canvas(self.admittance_plot_canvas_frame, "admittance_canvas_agg")
         fig_adm, ax_adm = plt.subplots(figsize=(7, 4))
-
         plot_adm_success = False
-
         initial_adm_tuple = self.initial_admittance_data_per_note.get(selected_note) if self.initial_admittance_data_per_note else None
         if initial_adm_tuple and initial_adm_tuple[0].size > 0:
             freqs_init, adm_db_init = initial_adm_tuple
             ax_adm.plot(freqs_init, adm_db_init, label=f"Admitancia Inicial ({selected_note})", color='gray', linestyle=':')
-
         optimized_adm_tuple = self.optimized_admittance_data_per_note.get(selected_note)
         if optimized_adm_tuple and optimized_adm_tuple[0].size > 0:
             freqs_opt, adm_db_opt = optimized_adm_tuple
             ax_adm.plot(freqs_opt, adm_db_opt, label=f"Admitancia Optimizada ({selected_note})", color='blue')
             plot_adm_success = True
-
         if plot_adm_success:
             target_f = self.target_frequencies_map.get(selected_note)
-            if target_f:
-                ax_adm.axvline(target_f, color='r', linestyle='--', label=f"Frec. Obj: {target_f:.1f} Hz")
-            ax_adm.set_title(f"Admitancia para Nota {selected_note}")
-            ax_adm.set_xlabel("Frecuencia (Hz)"); ax_adm.set_ylabel("Admitancia (dB)")
+            if target_f: ax_adm.axvline(target_f, color='r', linestyle='--', label=f"Frec. Obj: {target_f:.1f} Hz")
+            ax_adm.set_title(f"Admitancia para Nota {selected_note}"); ax_adm.set_xlabel("Frecuencia (Hz)"); ax_adm.set_ylabel("Admitancia (dB)")
             ax_adm.legend(); ax_adm.grid(True, linestyle=':')
         else:
             ax_adm.text(0.5, 0.5, "No hay datos de admitancia", ha='center', va='center', transform=ax_adm.transAxes)
             ax_adm.set_title(f"Admitancia para Nota {selected_note}")
-
         fig_adm.tight_layout()
         self.admittance_canvas_agg = FigureCanvasTkAgg(fig_adm, master=self.admittance_plot_canvas_frame)
-        self.admittance_canvas_agg.draw()
-        self.admittance_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.admittance_canvas_agg.draw(); self.admittance_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        current_physics_state = self.physics_states_per_note.get(selected_note)
+        current_optimized_ic = self.optimized_acoustic_analysis_data.get(selected_note) if self.optimized_acoustic_analysis_data else None
         pf_data_for_note = self.pressure_flow_data_per_note.get(selected_note)
-
         self._clear_plot_canvas(self.detailed_pressure_flow_plot_frame, "pf_canvas_agg")
         fig_pf, axs_pf = plt.subplots(2, 1, figsize=(7, 5), sharex=True)
         try:
             if pf_data_for_note and 'x_coords' in pf_data_for_note and \
                'pressure_modes' in pf_data_for_note and 'flow_modes' in pf_data_for_note and \
                'frequencies' in pf_data_for_note:
-                x_coords = pf_data_for_note['x_coords']
-                pressure_modes = pf_data_for_note['pressure_modes']
-                flow_modes = pf_data_for_note['flow_modes']
-                plot_frequencies = pf_data_for_note['frequencies']
+                x_coords = pf_data_for_note['x_coords']; pressure_modes = pf_data_for_note['pressure_modes']
+                flow_modes = pf_data_for_note['flow_modes']; plot_frequencies = pf_data_for_note['frequencies']
                 if x_coords is not None and pressure_modes is not None and flow_modes is not None and plot_frequencies is not None and x_coords.size > 0:
-                    if pressure_modes.shape[0] == len(plot_frequencies) and pressure_modes.ndim == 2:
-                        pressure_modes_to_plot = pressure_modes.T
-                        flow_modes_to_plot = flow_modes.T
-                    else:
-                        pressure_modes_to_plot = pressure_modes
-                        flow_modes_to_plot = flow_modes
-                        if pressure_modes.ndim == 2 and pressure_modes.shape[1] != len(plot_frequencies):
-                             logger.warning(f"Dimensiones de P/F no coinciden con frecuencias para {selected_note}. P: {pressure_modes.shape}, F: {flow_modes.shape}, Freqs: {len(plot_frequencies)}")
-
+                    pressure_modes_to_plot = pressure_modes.T if pressure_modes.shape[0] == len(plot_frequencies) and pressure_modes.ndim == 2 else pressure_modes
+                    flow_modes_to_plot = flow_modes.T if flow_modes.shape[0] == len(plot_frequencies) and flow_modes.ndim == 2 else flow_modes
+                    if pressure_modes.ndim == 2 and pressure_modes.shape[1] != len(plot_frequencies):
+                         logger.warning(f"Dimensiones de P/F no coinciden con frecuencias para {selected_note}. P: {pressure_modes.shape}, F: {flow_modes.shape}, Freqs: {len(plot_frequencies)}")
                     for i in range(min(pressure_modes_to_plot.shape[1], len(plot_frequencies))):
                         axs_pf[0].plot(x_coords, np.real(pressure_modes_to_plot[:, i]), label=f"Modo Frec: {plot_frequencies[i]:.0f} Hz")
                         axs_pf[1].plot(x_coords, np.real(flow_modes_to_plot[:, i]), label=f"Modo Frec: {plot_frequencies[i]:.0f} Hz")
-                else:
-                    logger.warning(f"Datos de presión/flujo incompletos o vacíos para la nota {selected_note}")
-                    axs_pf[0].text(0.5, 0.5, "Datos P/F incompletos", ha='center', va='center', transform=axs_pf[0].transAxes)
-            else:
-                logger.warning(f"No hay datos P/F válidos para la nota {selected_note}")
-                axs_pf[0].text(0.5, 0.5, "No hay datos P/F", ha='center', va='center', transform=axs_pf[0].transAxes)
-            axs_pf[0].set_title(f"Presión Acústica ({selected_note})", fontsize=9)
-            axs_pf[0].set_ylabel("Presión (Pa)"); axs_pf[0].grid(True, linestyle=':'); axs_pf[0].legend(fontsize='small')
-            axs_pf[1].set_title(f"Flujo Acústico ({selected_note})", fontsize=9)
-            axs_pf[1].set_xlabel("Posición (m)"); axs_pf[1].set_ylabel("Flujo (m³/s)"); axs_pf[1].grid(True, linestyle=':'); axs_pf[1].legend(fontsize='small')
+                else: axs_pf[0].text(0.5, 0.5, "Datos P/F incompletos", ha='center', va='center', transform=axs_pf[0].transAxes)
+            else: axs_pf[0].text(0.5, 0.5, "No hay datos P/F", ha='center', va='center', transform=axs_pf[0].transAxes)
+            axs_pf[0].set_title(f"Presión Acústica ({selected_note})", fontsize=9); axs_pf[0].set_ylabel("Presión (Pa)"); axs_pf[0].grid(True, linestyle=':'); axs_pf[0].legend(fontsize='small')
+            axs_pf[1].set_title(f"Flujo Acústico ({selected_note})", fontsize=9); axs_pf[1].set_xlabel("Posición (m)"); axs_pf[1].set_ylabel("Flujo (m³/s)"); axs_pf[1].grid(True, linestyle=':'); axs_pf[1].legend(fontsize='small')
         except Exception as e_pf:
             logger.error(f"Error graficando presión/flujo para {selected_note}: {e_pf}", exc_info=True)
             axs_pf[0].text(0.5, 0.5, "Error al graficar P/F", ha='center', va='center', transform=axs_pf[0].transAxes)
         fig_pf.tight_layout()
         self.pf_canvas_agg = FigureCanvasTkAgg(fig_pf, master=self.detailed_pressure_flow_plot_frame)
-        self.pf_canvas_agg.draw()
-        self.pf_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.pf_canvas_agg.draw(); self.pf_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         self._clear_plot_canvas(self.detailed_geometry_plot_frame, "geom_canvas_agg")
         fig_geom_simple, ax_geom_simple = plt.subplots(figsize=(7, 2.5))
-
         plot_geom_simple_success = False
         try:
-            if current_physics_state and isinstance(current_physics_state.instrument_geometry, InstrumentGeometry):
-                instrument_geometry_to_plot: InstrumentGeometry = current_physics_state.instrument_geometry
-
-                logger.info(f"Intentando plotear geometría simplificada para {selected_note} usando get_xr_main_bore().")
-                if hasattr(instrument_geometry_to_plot, 'get_xr_main_bore'):
-                    x_coords_m_bore, r_coords_m_bore = instrument_geometry_to_plot.get_xr_main_bore()
-                    logger.info(f"Coordenadas del bore obtenidas de get_xr_main_bore (se asume en metros).")
-                    x_coords_m_bore = np.array(x_coords_m_bore)
-                    r_coords_m_bore = np.array(r_coords_m_bore)
-
-                    if x_coords_m_bore is not None and r_coords_m_bore is not None and \
-                       len(x_coords_m_bore) > 0 and len(r_coords_m_bore) > 0:
+            if current_optimized_ic and hasattr(current_optimized_ic, 'get_instrument_geometry') and isinstance(current_optimized_ic.get_instrument_geometry(), InstrumentGeometry): # type: ignore
+                instrument_geometry_to_plot: InstrumentGeometry = current_optimized_ic.get_instrument_geometry() # type: ignore
+                if hasattr(instrument_geometry_to_plot, 'get_xr_main_bore'): # type: ignore
+                    x_coords_m_bore, r_coords_m_bore = instrument_geometry_to_plot.get_xr_main_bore() # type: ignore
+                    x_coords_m_bore, r_coords_m_bore = np.array(x_coords_m_bore), np.array(r_coords_m_bore)
+                    if x_coords_m_bore.size > 0 and r_coords_m_bore.size > 0:
                         min_len = min(len(x_coords_m_bore), len(r_coords_m_bore))
-                        x_coords_m_bore = x_coords_m_bore[:min_len]
-                        r_coords_m_bore = r_coords_m_bore[:min_len]
-                        logger.info(f"Datos para plotear bore (en metros): X_shape={x_coords_m_bore.shape}, R_shape={r_coords_m_bore.shape}")
-                        logger.debug(f"Primeros puntos X_m: {x_coords_m_bore[:5]}, R_m: {r_coords_m_bore[:5]}")
-                        FluteOperations._plot_shape_static(
-                            (x_coords_m_bore, r_coords_m_bore),
-                            ax_geom_simple, 1.0, color='black', linewidth=1
-                        )
+                        FluteOperations._plot_shape_static((x_coords_m_bore[:min_len], r_coords_m_bore[:min_len]), ax_geom_simple, 1.0, color='black', linewidth=1)
                         plot_geom_simple_success = True
-                    else:
-                        logger.warning("'get_xr_main_bore' no devolvió datos válidos para el bore.")
-                else:
-                    logger.error("El objeto InstrumentGeometry no tiene el método 'get_xr_main_bore'. No se puede plotear el bore simplificado.")
-
                 holes_details_for_plot = []
-                fingering = instrument_geometry_to_plot.fingering_chart.fingering_of(selected_note)
-                for hole_obj in instrument_geometry_to_plot.holes:
-                    pos_m = hole_obj.position.get_value()
-                    rad_m_val = 0.003
-                    if hasattr(hole_obj.shape, 'get_radius_at'):
-                        actual_hole_shape_for_radius = hole_obj.shape
-                        rad_m_val = actual_hole_shape_for_radius.get_radius_at(0)
-                    else:
-                        actual_hole_shape_for_radius = None
-                        if hasattr(hole_obj, 'shape_char') and hasattr(hole_obj.shape_char, 'hole_shape'):
-                            actual_hole_shape_for_radius = hole_obj.shape_char.hole_shape
-                        elif hasattr(hole_obj, 'shape'):
-                            actual_hole_shape_for_radius = hole_obj.shape
-                        if actual_hole_shape_for_radius and hasattr(actual_hole_shape_for_radius, 'radius'):
-                            rad_param = actual_hole_shape_for_radius.radius
-                            rad_m_val = rad_param.get_value() if hasattr(rad_param, 'get_value') else rad_param
+                fingering = instrument_geometry_to_plot.fingering_chart.fingering_of(selected_note) # type: ignore
+                for hole_obj in instrument_geometry_to_plot.holes: # type: ignore
+                    pos_m = hole_obj.position.get_value(); rad_m_val = 0.003
+                    if hasattr(hole_obj.shape, 'get_radius_at'): rad_m_val = hole_obj.shape.get_radius_at(0)
+                    elif hasattr(hole_obj, 'shape_char') and hasattr(hole_obj.shape_char, 'hole_shape') and hasattr(hole_obj.shape_char.hole_shape, 'radius'):
+                        rad_param = hole_obj.shape_char.hole_shape.radius
+                        rad_m_val = rad_param.get_value() if hasattr(rad_param, 'get_value') else rad_param
                     is_open = fingering.is_side_comp_open(hole_obj.label)
                     holes_details_for_plot.append({'label': hole_obj.label, 'position_m': pos_m, 'radius_m': rad_m_val, 'is_open': is_open})
-
                 if holes_details_for_plot:
-                    FluteOperations._plot_holes_static(
-                        holes_details_for_plot, ax_geom_simple, 1.0, default_color='dimgray', linewidth=0.5
-                    )
+                    FluteOperations._plot_holes_static(holes_details_for_plot, ax_geom_simple, 1.0, default_color='dimgray', linewidth=0.5)
                     plot_geom_simple_success = True
-
                 if plot_geom_simple_success:
-                    ax_geom_simple.set_xlabel("Posición (m)")
-                    ax_geom_simple.set_ylabel("Radio (m)")
-                    ax_geom_simple.set_title(f"Geometría Simplificada ({selected_note})", fontsize=9)
-                    ax_geom_simple.grid(True, linestyle=':', alpha=0.7)
-                    xlim_to_set_m = None
+                    ax_geom_simple.set_xlabel("Posición (m)"); ax_geom_simple.set_ylabel("Radio (m)")
+                    ax_geom_simple.set_title(f"Geometría Simplificada ({selected_note})", fontsize=9); ax_geom_simple.grid(True, linestyle=':', alpha=0.7)
                     if hasattr(axs_pf[1], 'get_xlim'):
-                        try:
-                            xlim_pf_m = axs_pf[1].get_xlim()
-                            if xlim_pf_m[0] is not None and xlim_pf_m[1] is not None:
-                               xlim_to_set_m = xlim_pf_m
-                        except Exception as e_get_xlim: logger.warning(f"No se pudo obtener xlim de P/F: {e_get_xlim}")
-                    if xlim_to_set_m: ax_geom_simple.set_xlim(xlim_to_set_m)
+                        try: xlim_pf_m = axs_pf[1].get_xlim(); ax_geom_simple.set_xlim(xlim_pf_m)
+                        except: pass
                     else: ax_geom_simple.autoscale_view(tight=True, scalex=True, scaley=False)
                     ax_geom_simple.autoscale_view(tight=None, scalex=False, scaley=True)
-                else:
-                    ax_geom_simple.text(0.5, 0.5, "Geometría no disponible", ha='center', va='center', transform=ax_geom_simple.transAxes)
-            else:
-                logger.error("current_physics_state.instrument_geometry no es una instancia válida de InstrumentGeometry o es None")
-                ax_geom_simple.text(0.5, 0.5, "Geometría no disponible", ha='center', va='center', transform=ax_geom_simple.transAxes)
+                else: ax_geom_simple.text(0.5, 0.5, "Geometría no disponible", ha='center', va='center', transform=ax_geom_simple.transAxes)
+            else: ax_geom_simple.text(0.5, 0.5, "Geometría no disponible", ha='center', va='center', transform=ax_geom_simple.transAxes)
         except Exception as e_geom_simple:
             logger.error(f"Error graficando geometría simplificada para {selected_note}: {e_geom_simple}", exc_info=True)
             ax_geom_simple.text(0.5, 0.5, f"Error al graficar geometría:\n{e_geom_simple}", ha='center', va='center', transform=ax_geom_simple.transAxes, color='red')
-
-        if not plot_geom_simple_success:
-            ax_geom_simple.set_title(f"Geometría Simplificada ({selected_note}) - Error", fontsize=9)
-
+        if not plot_geom_simple_success: ax_geom_simple.set_title(f"Geometría Simplificada ({selected_note}) - Error", fontsize=9)
         fig_geom_simple.tight_layout(pad=0.5)
         self.geom_canvas_agg = FigureCanvasTkAgg(fig_geom_simple, master=self.detailed_geometry_plot_frame)
-        self.geom_canvas_agg.draw()
-        self.geom_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.geom_canvas_agg.draw(); self.geom_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def _update_ow_detailed_geometry_plot(self, event: Optional[tk.Event]):
         selected_note = self.ow_detailed_geometry_note_var.get()
-
-        if not selected_note or not self.physics_states_per_note:
+        if not selected_note or not self.optimized_acoustic_analysis_data: # Usar optimized_acoustic_analysis_data
             self._clear_plot_canvas(self.ow_detailed_geometry_plot_frame, "ow_detailed_geometry_canvas_agg")
             if hasattr(self, 'ow_detailed_geometry_plot_frame'):
-                error_label = ttk.Label(self.ow_detailed_geometry_plot_frame, text="Seleccione una nota o no hay datos de geometría.")
+                error_label = ttk.Label(self.ow_detailed_geometry_plot_frame, text="Seleccione una nota o no hay datos de geometría optimizada.")
                 error_label.pack(padx=10, pady=10, anchor="center")
             return
-
         self._clear_plot_canvas(self.ow_detailed_geometry_plot_frame, "ow_detailed_geometry_canvas_agg")
+        
+        current_optimized_ic_for_ow_geom = self.optimized_acoustic_analysis_data.get(selected_note) if self.optimized_acoustic_analysis_data else None
 
-        current_physics_state_for_ow_geom = self.physics_states_per_note.get(selected_note)
-
-        if current_physics_state_for_ow_geom and isinstance(current_physics_state_for_ow_geom.instrument_geometry, InstrumentGeometry):
-            instrument_geometry_ow_plot = current_physics_state_for_ow_geom.instrument_geometry
-            logger.info(f"Plotting OW Detailed Geometry for note {selected_note} in dedicated tab.")
+        if current_optimized_ic_for_ow_geom and \
+           hasattr(current_optimized_ic_for_ow_geom, 'get_instrument_geometry') and \
+           isinstance(current_optimized_ic_for_ow_geom.get_instrument_geometry(), InstrumentGeometry): # type: ignore
+            instrument_geometry_ow_plot: InstrumentGeometry = current_optimized_ic_for_ow_geom.get_instrument_geometry() # type: ignore
             try:
                 fig_ow_detailed = plt.figure()
                 instrument_geometry_ow_plot.plot_InstrumentGeometry(figure=fig_ow_detailed, note=selected_note)
-
-                if fig_ow_detailed and isinstance(fig_ow_detailed, plt.Figure):
-                    if hasattr(self, 'ow_detailed_geometry_plot_frame'):
-                        self.ow_detailed_geometry_canvas_agg = FigureCanvasTkAgg(fig_ow_detailed, master=self.ow_detailed_geometry_plot_frame)
-                        self.ow_detailed_geometry_canvas_agg.draw()
-                        self.ow_detailed_geometry_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-                else:
-                    logger.error("plot_InstrumentGeometry no devolvió una figura válida para la pestaña de geometría detallada.")
-                    if hasattr(self, 'ow_detailed_geometry_plot_frame'):
-                        error_label = ttk.Label(self.ow_detailed_geometry_plot_frame, text="Error: Geometría OW no disponible.")
-                        error_label.pack(padx=10, pady=10, anchor="center")
+                if fig_ow_detailed and isinstance(fig_ow_detailed, plt.Figure) and hasattr(self, 'ow_detailed_geometry_plot_frame'):
+                    self.ow_detailed_geometry_canvas_agg = FigureCanvasTkAgg(fig_ow_detailed, master=self.ow_detailed_geometry_plot_frame)
+                    self.ow_detailed_geometry_canvas_agg.draw()
+                    self.ow_detailed_geometry_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+                elif hasattr(self, 'ow_detailed_geometry_plot_frame'):
+                    error_label = ttk.Label(self.ow_detailed_geometry_plot_frame, text="Error: Geometría OW no disponible.")
+                    error_label.pack(padx=10, pady=10, anchor="center")
             except Exception as e_plot_ow_detailed:
                 logger.error(f"Error al plotear geometría OpenWind detallada para {selected_note}: {e_plot_ow_detailed}", exc_info=True)
                 if hasattr(self, 'ow_detailed_geometry_plot_frame'):
                     error_label = ttk.Label(self.ow_detailed_geometry_plot_frame, text=f"Error al graficar geometría OW detallada:\n{e_plot_ow_detailed}")
                     error_label.pack(padx=10, pady=10, anchor="center")
-        else:
-            logger.warning(f"No se pudo mostrar la geometría OW detallada para {selected_note} (estado físico o geometría no válidos).")
-            if hasattr(self, 'ow_detailed_geometry_plot_frame'):
-                error_label = ttk.Label(self.ow_detailed_geometry_plot_frame, text="Geometría OW detallada no disponible.")
-                error_label.pack(padx=10, pady=10, anchor="center")
+        elif hasattr(self, 'ow_detailed_geometry_plot_frame'):
+            error_label = ttk.Label(self.ow_detailed_geometry_plot_frame, text="Geometría OW detallada no disponible.")
+            error_label.pack(padx=10, pady=10, anchor="center")
 
     def _plot_openwind_admittance_summary(self):
         self._clear_plot_canvas(self.ow_admittance_summary_plot_frame, "ow_admittance_summary_canvas_agg")
         if not self.optimized_admittance_data_per_note or not self.flute_name or \
            not self.target_frequencies_map or self.diapason_freq_var.get() == "":
-            logger.warning("Datos insuficientes para plotear el resumen de admitancias de OpenWind.")
-            self._clear_plot_canvas(self.ow_admittance_summary_plot_frame, "ow_admittance_summary_canvas_agg")
             error_label = ttk.Label(self.ow_admittance_summary_plot_frame, text="No hay datos de admitancia optimizada para mostrar.")
-            error_label.pack(padx=10, pady=10, anchor="center")
-            return
+            error_label.pack(padx=10, pady=10, anchor="center"); return
         try: diapason_val = float(self.diapason_freq_var.get())
         except ValueError:
-            logger.error("Valor de diapasón inválido.")
-            self._clear_plot_canvas(self.ow_admittance_summary_plot_frame, "ow_admittance_summary_canvas_agg")
             error_label = ttk.Label(self.ow_admittance_summary_plot_frame, text="Valor de diapasón inválido.")
-            error_label.pack(padx=10, pady=10, anchor="center")
-            return
-
-        fig_ow_adm_summary = plot_optimized_admittances(
-            self.optimized_admittance_data_per_note, self.flute_name,
-            self.target_frequencies_map, diapason_val, return_fig=True
-        )
+            error_label.pack(padx=10, pady=10, anchor="center"); return
+        fig_ow_adm_summary = plot_optimized_admittances(self.optimized_admittance_data_per_note, self.flute_name, self.target_frequencies_map, diapason_val, return_fig=True)
         if fig_ow_adm_summary:
             self.ow_admittance_summary_canvas_agg = FigureCanvasTkAgg(fig_ow_adm_summary, master=self.ow_admittance_summary_plot_frame)
             self.ow_admittance_summary_canvas_agg.draw()
             self.ow_admittance_summary_canvas_agg.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         else:
-            logger.error("No se pudo generar la figura para el resumen de admitancias de OpenWind (plot_optimized_admittances devolvió None o una figura no válida).")
-            self._clear_plot_canvas(self.ow_admittance_summary_plot_frame, "ow_admittance_summary_canvas_agg")
             error_label = ttk.Label(self.ow_admittance_summary_plot_frame, text="No hay datos de admitancia optimizada para mostrar.")
             error_label.pack(padx=10, pady=10, anchor="center")
 
     def _on_closing_app(self):
         for widget in self.winfo_children():
-            if isinstance(widget, tk.Toplevel):
-                widget.destroy()
-
+            if isinstance(widget, tk.Toplevel): widget.destroy()
         if messagebox.askokcancel("Salir", "¿Está seguro de que desea salir de la aplicación?"):
-            plt.close('all')
-            self.destroy()
+            plt.close('all'); self.destroy()
 
 if __name__ == "__main__":
     app = FluteOptimizerApp()

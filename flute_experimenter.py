@@ -470,7 +470,8 @@ class FluteExperimentApp(tk.Tk):
                     part_d_orig = self.original_flute_ops.flute_data.data.get(part_n_orig, {})
                     measurements_orig = part_d_orig.get("measurements", [])
                     if measurements_orig:
-                        all_physical_diameters_orig.extend([m['diameter'] for m in measurements_orig if 'diameter' in m])
+                        all_physical_diameters_orig.extend([m['diameter'] for m in measurements_orig
+                                                             if 'diameter' in m])
                 
                 min_overall_physical_diameter_orig = min(all_physical_diameters_orig) if all_physical_diameters_orig else 10
                 y_pos_holes_orig = min_overall_physical_diameter_orig - 5 
@@ -500,9 +501,10 @@ class FluteExperimentApp(tk.Tk):
                     part_physical_start_abs_mm_orig = part_physical_starts_map_orig.get(part_name_hole_orig, 0.0)
                     hole_positions_orig = part_data_hole_orig.get("Holes position", [])
                     hole_diameters_orig = part_data_hole_orig.get("Holes diameter", [])
-                    
                     for h_pos_rel, h_diam in zip(hole_positions_orig, hole_diameters_orig):
                         abs_physical_hole_pos = part_physical_start_abs_mm_orig + h_pos_rel
+
+                        marker_size_scaled = max(h_diam * 0.8, 3)
                         plot_pos_on_physical_assembly = abs_physical_hole_pos # Ya es la posición física absoluta
                         
                         # Usar 'o' como marcador y escalar markersize con el diámetro del agujero
