@@ -439,7 +439,7 @@ def optimize_flute_from_json_full(
         status = f"{height:.3f} mm" if isinstance(height, (int, float)) and not np.isnan(height) else "Error en optimización"
         logger.info(f"  {note}: {status}")
 
-    return optimized_chimney_heights_mm, initial_admittance_data, optimized_admittance_data, flute_model_name, target_frequencies_hz_map, diapason_a4_hz_gui, optimized_impedance_computations_per_note, pressure_flow_data_per_note, notes_actually_optimized, initial_acoustic_analysis_dict # type: ignore
+    return optimized_chimney_heights_mm, initial_admittance_data, optimized_admittance_data, flute_model_name, target_frequencies_hz_map, diapason_a4_hz_gui, optimized_impedance_computations_per_note, pressure_flow_data_per_note, notes_actually_optimized, initial_acoustic_analysis_dict 
 
 if __name__ == "__main__":
     # Ejemplo de uso:

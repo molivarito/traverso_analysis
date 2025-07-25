@@ -153,55 +153,52 @@ class FluteOperations:
             # ax.clear() # Eliminado para permitir superposición por defecto
 
         combined_measurements = self.flute_data.combined_measurements
-        if not combined_measurements:
+        if not combined_measurements or len(combined_measurements) < 2:
             logger.warning(f"No hay mediciones combinadas para {self.flute_data.flute_model} en plot_combined_flute_data.")
-            # No dibujar texto de error si se está superponiendo. El llamador puede manejarlo.
-            # ax.text(0.5, 0.5, "No hay datos de mediciones combinadas", ha='center', va='center', transform=ax.transAxes)
-            # ax.set_title("Perfil de Flauta Combinado" + (f" - {self.flute_data.flute_model}" if self.flute_data.flute_model else ""))
             return ax
 
         label_to_use = plot_label if plot_label else self.flute_data.flute_model
 
         # Dibujar el perfil por segmentos, coloreando cada segmento según su parte de origen.
-        if plot_label != "_nolegend_": # Evitar dibujar el perfil principal si solo se quieren marcadores
-            current_segment_positions: List[float] = []
-            current_segment_diameters: List[float] = []
-            current_segment_part_name: Optional[str] = None
-            flute_label_applied = False # Para aplicar la etiqueta general de la flauta solo una vez
-            last_plotted_point_data: Optional[Dict[str, float]] = None # Para asegurar continuidad visual
+        # REMOVED: if plot_label != "_nolegend_": # Evitar dibujar el perfil principal si solo se quieren marcadores
+        current_segment_positions: List[float] = []
+        current_segment_diameters: List[float] = []
+        current_segment_part_name: Optional[str] = None
+        flute_label_applied = False # Para aplicar la etiqueta general de la flauta solo una vez
+        last_plotted_point_data: Optional[Dict[str, float]] = None # Para asegurar continuidad visual
 
-            for i, point in enumerate(combined_measurements):
-                point_part_name = point.get("source_part_name")
-                adjusted_point_position = point["position"] - x_axis_origin_offset
+        for i, point in enumerate(combined_measurements):
+            point_part_name = point.get("source_part_name")
+            adjusted_point_position = point["position"] - x_axis_origin_offset
 
-                if point_part_name != current_segment_part_name and current_segment_positions:
-                    # Finalizar y dibujar el segmento anterior
-                    part_color_idx = FLUTE_PARTS_ORDER.index(current_segment_part_name) if current_segment_part_name in FLUTE_PARTS_ORDER else 0
-                    segment_color = BASE_COLORS[part_color_idx % len(BASE_COLORS)]
-                    current_plot_segment_label = label_to_use if not flute_label_applied else None
-                    
-                    ax.plot(current_segment_positions, current_segment_diameters,
-                            linestyle=flute_style if flute_style else LINESTYLES[0],
-                            color=segment_color, label=current_plot_segment_label)
-                    if current_plot_segment_label: flute_label_applied = True
-                    
-                    last_plotted_point_data = {"position": current_segment_positions[-1], 
-                                               "diameter": current_segment_diameters[-1]}
-                    current_segment_positions = []
-                    current_segment_diameters = []
-
-                if not current_segment_positions and last_plotted_point_data: # Inicio de nuevo segmento
-                    current_segment_positions.append(last_plotted_point_data["position"])
-                    current_segment_diameters.append(last_plotted_point_data["diameter"])
-
-                current_segment_positions.append(adjusted_point_position)
-                current_segment_diameters.append(point["diameter"])
-                current_segment_part_name = point_part_name
-            
-            # Dibujar el último segmento acumulado
-            if current_segment_positions and len(current_segment_positions) > 1 and current_segment_part_name:
+            if point_part_name != current_segment_part_name and current_segment_positions:
+                # Finalizar y dibujar el segmento anterior
                 part_color_idx = FLUTE_PARTS_ORDER.index(current_segment_part_name) if current_segment_part_name in FLUTE_PARTS_ORDER else 0
                 segment_color = BASE_COLORS[part_color_idx % len(BASE_COLORS)]
+                current_plot_segment_label = label_to_use if not flute_label_applied else None
+
+                ax.plot(current_segment_positions, current_segment_diameters,
+                        linestyle=flute_style if flute_style else LINESTYLES[0],
+                        color=segment_color, label=current_plot_segment_label)
+                if current_plot_segment_label: flute_label_applied = True
+
+                last_plotted_point_data = {"position": current_segment_positions[-1],
+                                           "diameter": current_segment_diameters[-1]}
+                current_segment_positions = []
+                current_segment_diameters = []
+            # Estas líneas deben estar fuera del if anterior, para ejecutarse en cada iteración.
+            if not current_segment_positions and last_plotted_point_data: # Inicio de nuevo segmento
+                current_segment_positions.append(last_plotted_point_data["position"])
+                current_segment_diameters.append(last_plotted_point_data["diameter"])
+
+            current_segment_positions.append(adjusted_point_position)
+            current_segment_diameters.append(point["diameter"])
+            current_segment_part_name = point_part_name
+            
+        # Dibujar el último segmento acumulado
+        if current_segment_positions and len(current_segment_positions) > 1 and current_segment_part_name:
+                part_color_idx = FLUTE_PARTS_ORDER.index(current_segment_part_name) if current_segment_part_name in FLUTE_PARTS_ORDER else 0
+                segment_color = flute_color if flute_color else BASE_COLORS[part_color_idx % len(BASE_COLORS)] # Usar flute_color si se proporciona
                 current_plot_segment_label = label_to_use if not flute_label_applied else None
                 ax.plot(current_segment_positions, current_segment_diameters, linestyle=flute_style if flute_style else LINESTYLES[0], color=segment_color, label=current_plot_segment_label)
         
@@ -217,7 +214,7 @@ class FluteOperations:
             for i, part_name in enumerate(FLUTE_PARTS_ORDER):
                 part_data = self.flute_data.data.get(part_name, {})
                 part_total_length = part_data.get("Total length", 0.0)
-                # Mortise length del JSON de la parte actual
+                # Mortise length del JSON de la parte actual (profundidad del socket)
                 part_json_mortise_length = part_data.get("Mortise length", 0.0)
 
                 if part_name == FLUTE_PARTS_ORDER[0]: # Headjoint
@@ -225,10 +222,10 @@ class FluteOperations:
                     # Cuerpo de Headjoint: desde el corcho hasta (Total Length - Mortise Length del socket)
                     part_body_abs_start = stopper_pos
                     part_body_abs_end = part_total_length - part_json_mortise_length 
-                    
+
                     ax.vlines(part_body_abs_start - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='gray', linestyles='dashdot', alpha=0.7, label="Stopper" if i==0 else None)
                     # Marcador rojo: Fin cuerpo Headjoint / Inicio Socket Headjoint (donde se inserta Left)
-                    ax.vlines(part_body_abs_end - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6, label="HJ End/Socket Start" if i==0 else None) 
+                    ax.vlines(part_body_abs_end - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6, label="HJ End/Socket Start" if i==0 else None)
                     
                     current_abs_offset = part_body_abs_end # Punto de unión para Left
 
@@ -238,11 +235,11 @@ class FluteOperations:
                     part_abs_start_attach_point = current_abs_offset 
                     # El cuerpo de 'left' comienza inmediatamente en el punto de unión.
                     part_body_abs_start = part_abs_start_attach_point 
-                    # El cuerpo de 'left' se extiende por toda su 'Total length'. Su tenon final está incluido.
+                    # El cuerpo de 'left' se extiende por toda su 'Total length'. Su tenon final está incluido acústicamente.
                     part_body_abs_end = part_abs_start_attach_point + part_total_length
                     
                     # Marcador verde: Inicio del cuerpo de Left (que es el mismo que el punto de unión)
-                    ax.vlines(part_body_abs_start - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='green', linestyles='dotted', alpha=0.6, label="Socket End/Body Start" if i==1 else None)
+                    ax.vlines(part_body_abs_start - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='green', linestyles='dotted', alpha=0.6, label="Tenon End/Body Start" if i==1 else None)
                     # Marcador rojo: Fin de Left (fin de su cuerpo y tenon) / Inicio Socket Right
                     ax.vlines(part_body_abs_end - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6) 
                     
@@ -252,10 +249,10 @@ class FluteOperations:
                     part_abs_start_attach_point = current_abs_offset
                     # El cuerpo acústico de Right comienza después de su socket.
                     part_body_abs_start = part_abs_start_attach_point + part_json_mortise_length 
-                    # El cuerpo acústico de Right se extiende hasta el final físico de la parte Right (incluyendo su tenon).
+                    # El cuerpo acústico de Right se extiende hasta el final físico de la parte Right (incluyendo su tenon acústicamente).
                     part_body_abs_end = part_abs_start_attach_point + part_total_length     
                     
-                    ax.vlines(part_abs_start_attach_point - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6)
+                    ax.vlines(part_abs_start_attach_point - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6, label="Socket Start" if i==2 else None)
                     ax.vlines(part_body_abs_start - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='green', linestyles='dotted', alpha=0.6)
                     # Marcador rojo: Fin de Right (fin de su cuerpo y tenon) / Inicio Socket Foot
                     ax.vlines(part_body_abs_end - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6)
@@ -270,7 +267,7 @@ class FluteOperations:
                     # El cuerpo acústico de Foot comienza después de su socket.
                     part_body_abs_start = part_abs_start_attach_point + part_json_mortise_length 
                     # El cuerpo acústico de Foot se extiende hasta el final físico de Foot.
-                    part_body_abs_end = part_abs_start_attach_point + part_total_length     
+                    part_body_abs_end = part_abs_start_attach_point + part_total_length
                     
                     ax.vlines(part_abs_start_attach_point - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='red', linestyles='dotted', alpha=0.6)
                     ax.vlines(part_body_abs_start - x_axis_origin_offset, marker_y_bottom, marker_y_top, colors='green', linestyles='dotted', alpha=0.6)
